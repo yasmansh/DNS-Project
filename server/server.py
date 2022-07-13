@@ -22,11 +22,10 @@ def check_freshness(command):
 
 
 def secure_file_system(client, username):
-    base_path = os.getcwd()
-    base_len = base_path.__len__()
-    # print("hi."+base_path[base_len:])
+    pre_len = os.getcwd().__len__()
+    base_path = os.path.join(os.getcwd(), 'Directory')
     while True:
-        client.send(str.encode('\n' + username + '@' + user_securityLevel[username] + ':'))
+        client.send(str.encode('\n' + username + '@' + user_securityLevel[username] + ':' + base_path[pre_len:] + '>'))
         command = rsa.decrypt(client.recv(2048), private_key).decode()
         if check_freshness(command):
             command = command[:str(command).index('$')]
@@ -39,7 +38,7 @@ def secure_file_system(client, username):
             if path.__contains__('\\') or path.__contains__('/'):
                 ps = path.split('\\')
                 ps = path.split('/')
-                path = os.path.join(base_path, 'Directory', ps[0])
+                path = os.path.join(base_path, ps[0])
                 if os.path.exists(path):
                     pass
                 else:
@@ -51,7 +50,7 @@ def secure_file_system(client, username):
                     else:
                         os.mkdir(path)
             else:
-                path = os.path.join(base_path, 'Directory', path)
+                path = os.path.join(base_path, path)
                 if os.path.exists(path):
                     pass
                 else:
@@ -61,7 +60,7 @@ def secure_file_system(client, username):
             if path.__contains__('\\') or path.__contains__('/'):
                 ps = path.split('\\')
                 ps = path.split('/')
-                path = os.path.join(base_path, 'Directory', ps[0])
+                path = os.path.join(base_path, ps[0])
                 if os.path.exists(path):
                     pass
                 else:
@@ -78,32 +77,40 @@ def secure_file_system(client, username):
                 else:
                     open(path, 'a').close()
             else:
-                path = os.path.join(base_path, 'Directory', path)
+                path = os.path.join(base_path, path)
                 if os.path.exists(path):
                     os.utime(path, None)
                 else:
                     open(path, 'a').close()
+        elif command.startswith('cd'):
+            path = os.path.join(base_path, command.split()[1])
+            try:
+                os.chdir(path)
+                base_path = os.getcwd()
+            except:
+                client.send(str.encode('error|'))
+                pass
         elif command == 'ls':
-            path = os.path.join(base_path, 'Directory')
-            client.send(str.encode(str(os.listdir(path)) + '|'))
+            client.send(str.encode(str(os.listdir(base_path)) + '|'))
         elif command.startswith('ls'):
-            path = os.path.join(base_path, 'Directory', command.split()[1])
+            path = os.path.join(base_path, command.split()[1])
             try:
                 client.send(str.encode(str(os.listdir(path)) + '|'))
             except:
                 pass
         elif command.startswith('rm') and not command.startswith('rm -r'):  # Remove file
-            path = os.path.join(base_path, 'Directory', command.split()[1])
+            path = os.path.join(base_path, command.split()[1])
             try:
                 os.remove(path)
             except:
                 pass
         elif command.startswith('rm -r'):  # Remove a directory
-            path = os.path.join(base_path, 'Directory', command.split()[2])
+            path = os.path.join(base_path, command.split()[2])
             try:
                 os.rmdir(path)
             except:
                 pass
+         #mv moonde
 
     client.close(0)
 
