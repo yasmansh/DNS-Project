@@ -1,5 +1,7 @@
 import socket
 import datetime
+import rsa
+import pyDH
 
 
 def get_timestamp():
@@ -17,20 +19,21 @@ with open("configuration_ip_port", "r") as f:
 client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 client.connect((host, port))
 
-f = open("..\server\server_pub_key.txt", "r")
-public_key_server = f.read()
-f.close()
+with open("..\server\PK_server.pem", "rb") as f:
+    data = f.read()
+    server_public_key = rsa.PublicKey.load_pkcs1(data)
 
 while True:
     try:
         response = client.recv(2048).decode()
-        print(response)
         if response[-1] == '|':
+            print(response[:-1])
             continue
+        print(response)
         command = input()
         command = command + '$' + str(get_timestamp())
-        client.send(str.encode(command))
-
+        cipher = rsa.encrypt(command.encode(), server_public_key)
+        client.send(cipher)
 
     except Exception as e:
         print("Error")
