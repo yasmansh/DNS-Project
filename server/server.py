@@ -4,8 +4,8 @@ import hashlib
 import rsa
 import datetime
 import os
-import touch
 import shutil
+import click
 
 
 def get_timestamp():
@@ -110,7 +110,23 @@ def secure_file_system(client, username):
                 os.rmdir(path)
             except:
                 pass
-         #mv moonde
+        elif command.startswith('edit'):
+            path = os.path.join(base_path, command.split()[1])
+            try:
+                f = open(path, "r")
+                initial_data = f.read()
+                edited_data = click.edit(initial_data)
+                f.close()
+
+                with open(path, "w") as f:
+                    f.write(edited_data)
+                    f.close()
+
+            except:
+                pass
+        else:
+            client.send(str.encode('bad request|'))
+        # mv moonde
 
     client.close(0)
 
