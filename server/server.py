@@ -4,6 +4,8 @@ import hashlib
 import rsa
 import datetime
 import os
+import touch
+import shutil
 
 
 def get_timestamp():
@@ -26,16 +28,82 @@ def secure_file_system(client, username):
     while True:
         client.send(str.encode('\n' + username + '@' + user_securityLevel[username] + ':'))
         command = rsa.decrypt(client.recv(2048), private_key).decode()
-        if command.__contains__('mkdir'):
-            path = command[:str(command).index('$')].split()[1]
+        if check_freshness(command):
+            command = command[:str(command).index('$')]
+        else:
+            client.send(str.encode('Please try again later.\n|'))
+            return
+
+        if command.startswith('mkdir'):
+            path = command.split()[1]
             if path.__contains__('\\') or path.__contains__('/'):
                 ps = path.split('\\')
                 ps = path.split('/')
-            path = os.path.join(base_path, 'Directory', ps[0])
-            os.mkdir(path)
-            for i in range(1, len(ps)):
-                path = os.path.join(path, ps[i])
-                os.mkdir(path)
+                path = os.path.join(base_path, 'Directory', ps[0])
+                if os.path.exists(path):
+                    pass
+                else:
+                    os.mkdir(path)
+                for i in range(1, len(ps)):
+                    path = os.path.join(path, ps[i])
+                    if os.path.exists(path):
+                        pass
+                    else:
+                        os.mkdir(path)
+            else:
+                path = os.path.join(base_path, 'Directory', path)
+                if os.path.exists(path):
+                    pass
+                else:
+                    os.mkdir(path)
+        elif command.startswith('touch'):
+            path = command.split()[1]
+            if path.__contains__('\\') or path.__contains__('/'):
+                ps = path.split('\\')
+                ps = path.split('/')
+                path = os.path.join(base_path, 'Directory', ps[0])
+                if os.path.exists(path):
+                    pass
+                else:
+                    os.mkdir(path)
+                for i in range(1, len(ps) - 1):
+                    path = os.path.join(path, ps[i])
+                    if os.path.exists(path):
+                        pass
+                    else:
+                        os.mkdir(path)
+                path = os.path.join(path, ps[-1])
+                if os.path.exists(path):
+                    os.utime(path, None)
+                else:
+                    open(path, 'a').close()
+            else:
+                path = os.path.join(base_path, 'Directory', path)
+                if os.path.exists(path):
+                    os.utime(path, None)
+                else:
+                    open(path, 'a').close()
+        elif command == 'ls':
+            path = os.path.join(base_path, 'Directory')
+            client.send(str.encode(str(os.listdir(path)) + '|'))
+        elif command.startswith('ls'):
+            path = os.path.join(base_path, 'Directory', command.split()[1])
+            try:
+                client.send(str.encode(str(os.listdir(path)) + '|'))
+            except:
+                pass
+        elif command.startswith('rm') and not command.startswith('rm -r'):  # Remove file
+            path = os.path.join(base_path, 'Directory', command.split()[1])
+            try:
+                os.remove(path)
+            except:
+                pass
+        elif command.startswith('rm -r'):  # Remove a directory
+            path = os.path.join(base_path, 'Directory', command.split()[2])
+            try:
+                os.rmdir(path)
+            except:
+                pass
 
     client.close(0)
 
