@@ -3,7 +3,7 @@ import threading
 import hashlib
 import rsa
 import datetime
-import pyDH
+import os
 
 
 def get_timestamp():
@@ -19,7 +19,44 @@ def check_freshness(command):
     return False
 
 
-def secure_file_system(client):
+def secure_file_system(client, username):
+    base_path = os.getcwd()
+    base_len = base_path.__len__()
+    # print("hi."+base_path[base_len:])
+    while True:
+        client.send(str.encode('\n' + username + '@' + user_securityLevel[username] + ':'))
+        command = rsa.decrypt(client.recv(2048), private_key).decode()
+        if command.__contains__('mkdir'):
+            path = command[:str(command).index('$')].split()[1]
+            if path.__contains__('\\') or path.__contains__('/'):
+                ps = path.split('\\')
+                ps = path.split('/')
+            path = os.path.join(base_path, 'Directory', ps[0])
+            os.mkdir(path)
+            for i in range(1, len(ps)):
+                path = os.path.join(path, ps[i])
+                os.mkdir(path)
+
+    client.close(0)
+
+
+def access_control(client):
+    client.send(str.encode(
+        str(user_securityLevel) + '\nPlease Enter username #security level(1.Top secret, 2.secret, 3.Unclassified):'))
+    command = rsa.decrypt(client.recv(2048), private_key).decode()
+    if check_freshness(command):
+        command = command[:str(command).index('$')]
+    else:
+        client.send(str.encode('Please try again later.\n|'))
+        return
+    u, l = command.split()
+    print(command.split())
+    if l == '1':
+        user_securityLevel[u] = 'Top secret'
+    elif l == '2':
+        user_securityLevel[u] = 'Secret'
+    else:
+        user_securityLevel[u] = 'Unclassified'
     pass
 
 
@@ -75,6 +112,7 @@ def threaded_client(client):  # Authentication
             # Password hash using SHA256
             password = hashlib.sha256(str.encode(password)).hexdigest()
             user_pass[username] = password
+            user_securityLevel[username] = 'Unclassified'
             user_info.append((username, first_name, last_name))
             client.send(str.encode('Registration successful|'))
             continue  # Back to menu
@@ -94,11 +132,15 @@ def threaded_client(client):  # Authentication
             else:
                 client.send(str.encode('Please try again later.\n|'))
                 continue
+            if username == 'root' and password == '000':
+                access_control(client)
+                continue
+
             password = hashlib.sha256(str.encode(password)).hexdigest()
             if (username in user_pass and user_pass[username] == password):
                 client.send(str.encode('Login successful|'))
                 print('Connected : ', username)
-                secure_file_system(client)
+                secure_file_system(client, username)
             else:
                 client.send(str.encode('Incorrect username or password.|\n'))
                 continue  # Back to menu
@@ -133,6 +175,7 @@ except socket.error as e:
 print('Waiting for a connection...')
 server_socket.listen(20)
 user_pass = {}
+user_securityLevel = {}  # Top secret , Secret , Unclassified
 user_info = []  # (username, first_name, last_name)
 
 while True:

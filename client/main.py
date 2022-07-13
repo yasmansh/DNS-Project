@@ -1,7 +1,6 @@
 import socket
 import datetime
 import rsa
-import pyDH
 
 
 def get_timestamp():
@@ -38,23 +37,4 @@ while True:
     except Exception as e:
         print("Error")
         break
-"""
-response = client.recv(2048)
-username = input(response.decode())
-client.send(str.encode(username))
-
-response = client.recv(2048)
-password = input(response.decode())
-client.send(str.encode(password))
-
-response = client.recv(2048).decode()
-print(response)
-"""
-
-''' Response : Status of Connection :
-     > Registration successful 
-	 > Login successful
-	 > Incorrect username or password.
-'''
-
 client.close()
