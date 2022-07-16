@@ -52,7 +52,7 @@ def create_empty_dir(base_path, db, public_key):
         response = db.execute(query)
         folder = response.fetchone()
         folder_id = folder[0]
-        f = open(os.path.join(path, '.meta'), 'ab')
+        f = open(os.path.join(path, '.meta'), 'wb')
         message = f"""{folder_id}
 {ts}
 0"""
@@ -66,3 +66,25 @@ def decrypt_cipher(cipher, private_key):
     chunks_plain = [rsa.decrypt(i, private_key).decode() for i in chunks]
     command = ''.join(chunks_plain)
     return command
+
+
+def encrypt_and_sign(message, private_key, public_key):
+    timestamp = get_timestamp()
+    plaintext = f"{message}||{timestamp}"
+    signature = rsa.sign(plaintext.encode(), private_key, 'SHA-256')
+    cipher = encrypt_message(f"{plaintext}||{signature}", public_key)
+    return cipher
+
+
+def check_sign_and_timestamp(cipher, private_key, public_key):
+    plaintext = decrypt_cipher(cipher, private_key)
+    plaintext = plaintext.split('||')
+    message = '||'.join(plaintext[:-2])
+    timestamp = eval(plaintext[-2])
+    signature = eval(plaintext[-1])
+    m = '||'.join(plaintext[:-1])
+    if not rsa.verify(str.encode(m), signature, public_key):
+        return False, f"Wrong Signature!"
+    if not check_freshness(timestamp):
+        return False, f"Time Expired!"
+    return True, message
