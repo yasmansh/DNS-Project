@@ -33,29 +33,34 @@ client.send(encrypt_and_sign(message, private_key, server_public_key))
 while True:
     # try:
     cipher = client.recv(2048)
-    ok, message = check_sign_and_timestamp(cipher, private_key, server_public_key)
+    ok, message_split = check_sign_and_timestamp(cipher, private_key, server_public_key, client)
     if not ok:
-        client.send(encrypt_and_sign(message, private_key, server_public_key))
         continue
-    message_split = message.split('||')
     message_type = message_split[0]
     if message_type == 'M':
         m = message_split[1]
         print(m)
-    elif message_type == 'D':  # D$get$file/dir$id      D$set$file/dir/id$ticket
+    elif message_type == 'D':  # D||get||file/dir||id      D||set||file/dir||id||ticket
         get_or_set = message_split[1]
         m = message_split[2]
+        file_id = message_split[3]
         if get_or_set == 'get':
             if m == 'file':
                 file_id = message_split[3]
                 query = f"""SELECT * FROM file_keys WHERE id={file_id}"""
                 response = db.execute(query).fetchone()
-                ticket = response[4]
+                if response is None:
+                    ticket = 'none'
+                else:
+                    ticket = response[4]
             elif m == 'dir':
                 dir_id = message_split[3]
                 query = f"""SELECT * FROM dir_keys WHERE id={file_id}"""
                 response = db.execute(query).fetchone()
-                ticket = response[2]
+                if response is None:
+                    ticket = 'none'
+                else:
+                    ticket = response[1]
             message = f"{ticket}"
             cipher = encrypt_and_sign(message, private_key, server_public_key)
             client.send(cipher)
@@ -63,18 +68,34 @@ while True:
             ticket = message_split[4]
             if m == 'file':
                 file_id = message_split[3]
-                query = f"""UPDATE file_keys
-                SET ticket={ticket}
-                WHERE id={file_id}"""
-                db.execute(query)
-                db.commit()
+                query = f"SELECT * FROM file_keys WHERE id={file_id}"
+                response = db.execute(query).fetchone()
+                if response is None:
+                    query = f"""INSERT INTO file_keys
+                    VALUES ({file_id}, "{ticket}")"""
+                    db.execute(query)
+                    db.commit()
+                else:
+                    query = f"""UPDATE file_keys
+                    SET ticket={ticket}
+                    WHERE id={file_id}"""
+                    db.execute(query)
+                    db.commit()
             elif m == 'dir':
                 dir_id = message_split[3]
-                query = f"""UPDATE dir_keys
-                SET ticket={ticket}
-                WHERE id={dir_id}"""
-                db.execute(query)
-                db.commit()
+                query = f"SELECT * FROM dir_keys WHERE id={dir_id}"
+                response = db.execute(query).fetchone()
+                if response is None:
+                    query = f"""INSERT INTO dir_keys
+                    VALUES ({dir_id}, "{ticket}")"""
+                    db.execute(query)
+                    db.commit()
+                else:
+                    query = f"""UPDATE dir_keys
+                    SET ticket="{ticket}"
+                    WHERE id={dir_id}"""
+                    db.execute(query)
+                    db.commit()
     elif message_type == 'I':
         m = message_split[1]
         print(m)

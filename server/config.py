@@ -3,14 +3,14 @@ import sqlite3
 import os
 import random
 import string
-from utils import get_timestamp, random_string, encrypt_message, create_empty_dir
+from utils import get_timestamp, random_string, encrypt_message, gen_nonce, insert_query, write_meta
 import rsa
 
 db = sqlite3.connect('server.db')
 
 db.execute("""CREATE TABLE dirs
                 (id INTEGER PRIMARY KEY AUTOINCREMENT, name text, parent_id int,
-                 nonce char(64), timestamp BIGINT, empty BOOLEAN,
+                 read_token char(64), write_token char(64), timestamp BIGINT, base BOOLEAN,
                 FOREIGN KEY (parent_id) REFERENCES dirs(id))
                 """)
 
@@ -21,7 +21,7 @@ db.execute("""CREATE TABLE dirs_access
 
 db.execute("""CREATE TABLE files
                 (id INTEGER PRIMARY KEY AUTOINCREMENT, name text, dir_id int,
-                 nonce char(64), timestamp BIGINT,
+                read_token char(64), write_token char(64), timestamp BIGINT,
                 FOREIGN KEY (dir_id) REFERENCES dirs(id))
                 """)
 
@@ -47,18 +47,13 @@ with open("PR_server.pem", "ab") as f:
     f.write(pk)
 
 
-nonce = hashlib.sha256(random_string(64).encode()).hexdigest()
+read_token = gen_nonce()
+write_token = gen_nonce()
 ts = get_timestamp()
-db.execute(f"""INSERT INTO dirs (name, parent_id, nonce, timestamp, empty)
-VALUES ('Directory', null, "{nonce}", {ts}, false)""")
-db.commit()
-base_path = os.path.join(os.getcwd(), 'Directory')
-f = open(os.path.join(base_path, '.meta'), 'wb')
-ts = get_timestamp()
-message = f"""1
+query = f"""INSERT INTO dirs (id, name, parent_id, read_token, write_token, timestamp, base)
+VALUES (1, 'Directory', 1, "{read_token}", "{write_token}", {ts}, false)"""
+insert_query(db, query)
+content = f"""1
 {ts}
 0"""
-f.write(encrypt_message(message, public_key))
-f.close()
-for i in range(200):
-    create_empty_dir(base_path, db, public_key)
+write_meta(os.path.join(os.getcwd(), 'Directory'), content, public_key)

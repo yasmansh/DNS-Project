@@ -4,14 +4,13 @@ import rsa
 
 db = sqlite3.connect('client.db')
 
-db.execute("""CREATE TABLE dir_keys
-                (id int, name char(64), ticket char(64))
-                """)
-
 db.execute("""CREATE TABLE file_keys
-                (id int, name char(64), public_key varchar(512), private_key varchar(512), 
+                (id int, public_key varchar(512), private_key varchar(512), 
                 ticket char(64))
                 """)
+
+db.execute("""CREATE TABLE dir_keys
+            (id int, ticket char(64))""")
 
 public_key, private_key = rsa.newkeys(512)
 with open("PU_client.pem", "wb") as f:

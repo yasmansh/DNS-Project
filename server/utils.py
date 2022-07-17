@@ -35,31 +35,6 @@ def encrypt_message(message, public_key):
     return cipher
 
 
-def create_empty_dir(base_path, db, public_key):
-    rand = random_string(30)
-    name = hashlib.sha256(rand.encode()).hexdigest()
-    path = os.path.join(base_path, name)
-    nonce = hashlib.sha256(random_string(64).encode()).hexdigest()
-    if not os.path.exists(path):
-        os.mkdir(path)
-        ts = get_timestamp()
-        db.execute(f"""INSERT INTO dirs (name, parent_id, nonce, timestamp, empty)
-            VALUES ("{name}", 1, "{nonce}", {ts}, true)""")
-        db.commit()
-        query = f"""SELECT * FROM dirs
-        WHERE name="{name}" and parent_id=1
-        """
-        response = db.execute(query)
-        folder = response.fetchone()
-        folder_id = folder[0]
-        f = open(os.path.join(path, '.meta'), 'wb')
-        message = f"""{folder_id}
-{ts}
-0"""
-        f.write(encrypt_message(message, public_key))
-        f.close()
-
-
 def decrypt_cipher(cipher, private_key):
     n = 64
     chunks = [cipher[i:i + n] for i in range(0, len(cipher), n)]
@@ -76,7 +51,7 @@ def encrypt_and_sign(message, private_key, public_key):
     return cipher
 
 
-def check_sign_and_timestamp(cipher, private_key, public_key):
+def check_sign_and_timestamp(cipher, private_key, public_key, client):
     plaintext = decrypt_cipher(cipher, private_key)
     plaintext = plaintext.split('||')
     message = '||'.join(plaintext[:-2])
@@ -84,7 +59,26 @@ def check_sign_and_timestamp(cipher, private_key, public_key):
     signature = eval(plaintext[-1])
     m = '||'.join(plaintext[:-1])
     if not rsa.verify(str.encode(m), signature, public_key):
-        return False, f"Wrong Signature!"
+        message = f"M||Wrong Signature!"
+        client.send(encrypt_and_sign(message, private_key, public_key))
+        return False, ""
     if not check_freshness(timestamp):
-        return False, f"Time Expired!"
-    return True, message
+        message = f"M||Time Expired!"
+        client.send(encrypt_and_sign(message, private_key, public_key))
+        return False, ""
+    return True, message.split("||")
+
+
+def insert_query(db, query):
+    db.execute(query)
+    db.commit()
+
+
+def gen_nonce():
+    return hashlib.sha256(random_string(64).encode()).hexdigest()
+
+
+def write_meta(path, content, public_key):
+    f = open(os.path.join(path, '.meta'), 'wb')
+    f.write(encrypt_message(content, public_key))
+    f.close()

@@ -10,34 +10,11 @@ import click
 import sqlite3
 import random
 import string
+from time import sleep
 
 import client.main
-from utils import get_timestamp, create_empty_dir, random_string, decrypt_cipher, encrypt_and_sign, \
-    check_sign_and_timestamp, encrypt_message
-
-
-def allocate_empty_dir(db, username, first_name, last_name, password, user_public_key):
-    query = "SELECT * FROM dirs WHERE empty=true"
-    row = db.execute(query).fetchone()
-    dir_id = row[0]
-    dir_name = row[1]
-    name = f"{username}||Directory"
-    name = rsa.encrypt(name.encode(), public_key).hex()
-    os.rename(dir_name, name)
-    query = f"""UPDATE dirs
-                        SET empty=false, name="{name}"
-                        WHERE id={dir_id}"""
-    db.execute(query)
-    db.commit()
-    query = f"""INSERT INTO dirs_access (dir_id, username, owner, rw)
-                        VALUES ({dir_id}, "{username}", true, true)"""
-    db.execute(query)
-    db.commit()
-    query = f"""INSERT INTO accounts (username, first_name, last_name, password, base_dir)
-                            VALUES ("{username}", "{first_name}", "{last_name}", "{password}", {dir_id}
-                            )"""
-    db.execute(query)
-    db.commit()
+from utils import get_timestamp, random_string, decrypt_cipher, encrypt_and_sign, \
+    check_sign_and_timestamp, encrypt_message, insert_query, gen_nonce, write_meta
 
 
 def hash_file(filename):
@@ -75,25 +52,49 @@ def check_meta(path, timestamp):
     return True
 
 
-def write_meta(path, content, public_key):
-    f = open(os.path.join(path, '.meta'), 'wb')
-    f.write(encrypt_message(content, public_key))
-    f.close()
+def get_full_path(db, folder_id):
+    res = ''
+    while folder_id != 1:
+        query = f"SELECT * FROM dirs WHERE id={folder_id}"
+        folder = db.execute(query).fetchone()
+        folder_name = folder[1]
+        folder_parent = folder[2]
+        res = os.path.join(folder_name, res)
+        folder_id = folder_parent
+    return res
 
 
-def make_path(path, username, db, client, user_public_key):
-    metadata = get_folder_metadata(os.getcwd())
-    folder_id = metadata[0]
+def make_path(path, username, db, client, user_public_key, user_base_dir_id):
     path_split = path.split(os.path.sep)
-    for folder in path_split:
-        folder_name = rsa.encrypt(folder.encode(), public_key).hex()
-        flag_path = os.path.join(os.getcwd(), folder_name)
-        if os.path.exists(flag_path):
-            os.chdir(flag_path)
+    for new_folder in path_split:
+        metadata = get_folder_metadata(os.getcwd())
+        folder_id = eval(metadata[0])
+        query = f'SELECT * FROM dirs WHERE id={folder_id}'
+        folder_data = db.execute(query).fetchone()
+        folder_base = folder_data[6]
+        if new_folder == '.':
+            continue
+        elif new_folder == '..':
+            if folder_base != 1:
+                os.chdir(os.path.join(os.getcwd(), '..'))
+            continue
+        parent_id = folder_id if folder_id != 1 else user_base_dir_id
+        query = f'SELECT * FROM dirs WHERE name="{new_folder}" and parent_id={parent_id}'
+        new_folder_data = db.execute(query).fetchone()
+        if new_folder_data is not None:
+            list_dir = os.listdir()
+            print(list_dir)
+            for cipher in list_dir:
+                if os.path.isdir(cipher):
+                    real_name = rsa.decrypt(bytes.fromhex(cipher), private_key).decode()
+                    if real_name == new_folder:
+                        new_folder_name = cipher
+                        break
+            os.chdir(new_folder_name)
             data_split = get_folder_metadata(os.getcwd())
             dir_id = data_split[0]
             query = f"""SELECT * FROM dirs_access
-            WHERE id={dir_id}, username="{username}" """
+            WHERE dir_id={dir_id} and username="{username}" """
             access = db.execute(query).fetchone()
             rw = access[3]
             if rw == 0:
@@ -105,72 +106,76 @@ def make_path(path, username, db, client, user_public_key):
             cipher = encrypt_and_sign(message, private_key, user_public_key)
             client.send(cipher)
             cipher = client.recv(2048)
-            ok, message = check_sign_and_timestamp(cipher, private_key, user_public_key)
+            ok, message_split = check_sign_and_timestamp(cipher, private_key, user_public_key, client)
             if not ok:
-                client.send(encrypt_and_sign(message, private_key, user_public_key))
-                continue
-            message_split = message.split('||')
+                break
             ticket = message_split[0]
             query = f"""SELECT * FROM dirs
             WHERE id={dir_id}"""
             response = db.execute(query).fetchone()
-            nonce = response[3]
+            nonce = response[4]
             if ticket != nonce:
                 message = "M||You don't have required access.\n|"
                 cipher = encrypt_and_sign(message, private_key, user_public_key)
                 client.send(cipher)
                 return False
         else:
-            nonce = hashlib.sha256(str.encode(random_string(64)))
+            new_folder_name = rsa.encrypt(new_folder.encode(), public_key).hex()
+            read_token = gen_nonce()
+            write_token = gen_nonce()
             timestamp = get_timestamp()
-            db.execute(f"""INSERT INTO dirs (name, parent_id, nonce, timestamp, empty)
-                        VALUES ("{folder_name}", {folder_id}, "{nonce}", {timestamp}, false)""")
-            db.commit()
+            query = f"""INSERT INTO dirs (name, parent_id, read_token, write_token, timestamp, base)
+                        VALUES ("{new_folder}", {parent_id}, "{read_token}", "{write_token}",
+                         {timestamp}, false)"""
+            insert_query(db, query)
             query = f"""SELECT * FROM dirs
-                    WHERE name="{folder_name}" and parent_id={folder_id}
+                    WHERE name="{new_folder}" and parent_id={parent_id}
                     """
             response = db.execute(query)
             folder = response.fetchone()
             folder_id = folder[0]
-            os.mkdir(folder_name)
-            os.chdir(folder_name)
+            query = f"""INSERT INTO dirs_access (dir_id, username, owner, rw)
+                        VALUES ({folder_id}, "{username}", true, true)"""
+            insert_query(db, query)
+            message = f"D||set||dir||{folder_id}||{write_token}"
+            cipher = encrypt_and_sign(message, private_key, user_public_key)
+            client.send(cipher)
+            os.mkdir(new_folder_name)
+            os.chdir(new_folder_name)
             content = f"""{folder_id}
 {timestamp}
 1"""
             write_meta(os.getcwd(), content, public_key)
-        return True
+    return True
 
 
 def secure_file_system(client, username, user_public_key, db):
-    pre_len = os.getcwd().__len__()
     query = f'SELECT * FROM accounts WHERE username="{username}"'
-    response = db.execute(query)
-    user = response.fetchone()
+    user = db.execute(query).fetchone()
     base_dir_id = user[4]
     query = f"SELECT * FROM dirs WHERE id={base_dir_id}"
-    response = db.execute(query)
-    base_dir = response.fetchone()
-    base_dir_name = base_dir[1]
-    base_path = os.path.join(os.getcwd(), base_dir_name)
-    os.chdir(base_path)
+    base_dir = db.execute(query).fetchone()
+    current_dir_id = base_dir_id
     while True:
-        message = f"I||{username}: {base_path[pre_len:]}>"
+        message = f"I||{get_full_path(db, current_dir_id)}>"
         cipher = encrypt_and_sign(message, private_key, user_public_key)
         client.send(cipher)
         cipher = client.recv(2048)
-        ok, cmd = check_sign_and_timestamp(cipher, private_key, user_public_key)
+        ok, cmd_split = check_sign_and_timestamp(cipher, private_key, user_public_key, client)
         if not ok:
-            client.send(encrypt_and_sign(cmd, private_key, user_public_key))
             continue
-        cmd_split = cmd.split('||')
         cmd_type = cmd_split[0]
         if cmd_type == 'mkdir':  # mkdir$path$password$timestamp
             path = cmd_split[1]
-            res = make_path(os.path.normpath(path), username, db, client, user_public_key)
+            ra_cwd = os.getcwd()
+            res = make_path(path, username, db, client, user_public_key, base_dir_id)
+            os.chdir(ra_cwd)
             if res:
                 message = 'M||Folder Created Successfully'
                 cipher = encrypt_and_sign(message, private_key, user_public_key)
                 client.send(cipher)
+                sleep(1)
+
         # elif command.startswith('touch'):
         # elif command.startswith('cd'):
         #     path = os.path.join(base_path, command.split()[1])
@@ -221,23 +226,6 @@ def secure_file_system(client, username, user_public_key, db):
     client.close(0)
 
 
-# def access_control(client):
-#     client.send(str.encode(
-#         str(user_securityLevel) + '\nPlease Enter username #security level(1.Top secret, 2.secret, 3.Unclassified):'))
-#     command = rsa.decrypt(client.recv(2048), private_key).decode()
-#     if not check_freshness(command):
-#         client.send(str.encode('Please try again later.\n|'))
-#         return
-#     u, l = command.split()
-#     if l == '1':
-#         user_securityLevel[u] = 'Top secret'
-#     elif l == '2':
-#         user_securityLevel[u] = 'Secret'
-#     else:
-#         user_securityLevel[u] = 'Unclassified'
-#     pass
-
-
 def threaded_client(client):  # Authentication
     db = sqlite3.connect('server.db')
     os.chdir('Directory')
@@ -245,7 +233,6 @@ def threaded_client(client):  # Authentication
     message = decrypt_cipher(cipher, private_key)
     message_split = message.split('||')
     user_public_key = eval(message_split[0])
-    print(message_split)
     signature = eval(message_split[2])
     timestamp = message_split[1]
     if not rsa.verify(str(f"{user_public_key}||{timestamp}").encode(), signature, user_public_key):
@@ -255,18 +242,15 @@ def threaded_client(client):  # Authentication
         client.close()
     while True:
         message = f"""I||SignUp: 1, Login: 2, Exit: 3"""
-#         message = f"""I$SignUp: 1$first_name$last$name$username$password
-# Login: 2$username$password
-# Exit: 3"""
+        #         message = f"""I$SignUp: 1$first_name$last$name$username$password
+        # Login: 2$username$password
+        # Exit: 3"""
         cipher = encrypt_and_sign(message, private_key, user_public_key)
         client.send(cipher)
         cipher = client.recv(2048)
-        ok, cmd = check_sign_and_timestamp(cipher, private_key, user_public_key)
-        print(cmd)
+        ok, cmd_split = check_sign_and_timestamp(cipher, private_key, user_public_key, client)
         if not ok:
-            client.send(encrypt_and_sign(message, private_key, user_public_key))
             continue
-        cmd_split = cmd.split('||')
         cmd_type = cmd_split[0]
         if cmd_type == '1':
             first_name = cmd_split[1]
@@ -274,23 +258,26 @@ def threaded_client(client):  # Authentication
             username = cmd_split[3]
             password = cmd_split[4]
             query = f"""SELECT * FROM 'accounts' WHERE username="{username}" """
-            response = db.execute(query)
-            if len(response.fetchall()) != 0:
-                message = 'M||This username is already existed. Please enter another one!\n'
-                cipher = encrypt_and_sign(message, private_key, public_key)
+            response = db.execute(query).fetchone()
+            if response is not None:
+                message = 'M||This username is already existed. Please enter another one!'
+                cipher = encrypt_and_sign(message, private_key, user_public_key)
                 client.send(cipher)
                 continue
-            db.execute(query)
-            r = random.random()
-            if r <= 1 / 3:
-                allocate_empty_dir(db, username, first_name, last_name, password, user_public_key)
-            elif r <= 2 / 3:
-                create_empty_dir(os.path.join(os.getcwd()), db, public_key)
-                allocate_empty_dir(db, username, first_name, last_name, password, user_public_key)
-            else:
-                create_empty_dir(os.path.join(os.getcwd()), db, public_key)
-                create_empty_dir(os.path.join(os.getcwd()), db, public_key)
-                allocate_empty_dir(db, username, first_name, last_name, password, user_public_key)
+            timestamp = get_timestamp()
+            read_token = gen_nonce()
+            write_token = gen_nonce()
+            query = f"""INSERT INTO dirs (name, parent_id, read_token, write_token, timestamp, base)
+            VALUES ("{username}", 1, "{read_token}", "{write_token}", {timestamp}, true)"""
+            insert_query(db, query)
+            query = f'SELECT * FROM dirs WHERE parent_id=1 and name="{username}"'
+            folder = db.execute(query).fetchone()
+            folder_id = folder[0]
+            query = f"""INSERT INTO accounts 
+            VALUES ("{username}", "{first_name}", "{last_name}", "{password}", {folder_id})"""
+            insert_query(db, query)
+            query = f'INSERT INTO dirs_access VALUES ({folder_id}, "{username}", false, false)'
+            insert_query(db, query)
             message = 'M||Registration successful'
             cipher = encrypt_and_sign(message, private_key, user_public_key)
             client.send(cipher)
@@ -326,7 +313,6 @@ def threaded_client(client):  # Authentication
             print("Not understand|")
     client.close()
 
-
 with open(os.path.join('..', 'server', 'PU_server.pem'), "rb") as f:
     data = f.read()
     public_key = rsa.PublicKey.load_pkcs1(data)
@@ -349,9 +335,6 @@ except socket.error as e:
 
 print('Waiting for a connection...')
 server_socket.listen(20)
-user_pass = {}
-user_securityLevel = {}  # Top secret , Secret , Unclassified
-user_info = []  # (username, first_name, last_name)
 
 while True:
     Client, address = server_socket.accept()
