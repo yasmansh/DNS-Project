@@ -54,6 +54,7 @@ def encrypt_and_sign(message, private_key, public_key):
 def check_sign_and_timestamp(cipher, private_key, public_key, client):
     plaintext = decrypt_cipher(cipher, private_key)
     plaintext = plaintext.split('||')
+    print(plaintext)
     message = '||'.join(plaintext[:-2])
     timestamp = eval(plaintext[-2])
     signature = eval(plaintext[-1])
@@ -69,7 +70,7 @@ def check_sign_and_timestamp(cipher, private_key, public_key, client):
     return True, message.split("||")
 
 
-def insert_query(db, query):
+def insert_update_query(db, query):
     db.execute(query)
     db.commit()
 
@@ -82,3 +83,5 @@ def write_meta(path, content, public_key):
     f = open(os.path.join(path, '.meta'), 'wb')
     f.write(encrypt_message(content, public_key))
     f.close()
+
+

@@ -125,9 +125,9 @@ while True:
         else:
             cmd_split = cmd.split(' ')
             cmd_type = cmd_split[0]
-            if cmd_type == 'mkdir':
+            if cmd_type == 'mkdir' or cmd_type == 'touch':
                 path = cmd_split[1]
-                message = f"mkdir||{path}"
+                message = f"{cmd_type}||{path}"
                 cipher = encrypt_and_sign(message, private_key, server_public_key)
                 client.send(cipher)
 client.close()

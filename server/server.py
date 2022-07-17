@@ -14,7 +14,7 @@ from time import sleep
 
 import client.main
 from utils import get_timestamp, random_string, decrypt_cipher, encrypt_and_sign, \
-    check_sign_and_timestamp, encrypt_message, insert_query, gen_nonce, write_meta
+    check_sign_and_timestamp, encrypt_message, insert_update_query, gen_nonce, write_meta
 
 
 def hash_file(filename):
@@ -64,15 +64,18 @@ def get_full_path(db, folder_id):
     return res
 
 
-def make_path(path, username, db, client, user_public_key, user_base_dir_id):
+def make_path(path, username, db, client, user_public_key, user_base_dir_id, base_path):
     path_split = path.split(os.path.sep)
+    if path_split[0] == '':
+        os.chdir(base_path)
+        path_split = path_split[1:]
     for new_folder in path_split:
         metadata = get_folder_metadata(os.getcwd())
         folder_id = eval(metadata[0])
         query = f'SELECT * FROM dirs WHERE id={folder_id}'
         folder_data = db.execute(query).fetchone()
         folder_base = folder_data[6]
-        if new_folder == '.':
+        if new_folder == '.' or new_folder == '':
             continue
         elif new_folder == '..':
             if folder_base != 1:
@@ -127,7 +130,7 @@ def make_path(path, username, db, client, user_public_key, user_base_dir_id):
             query = f"""INSERT INTO dirs (name, parent_id, read_token, write_token, timestamp, base)
                         VALUES ("{new_folder}", {parent_id}, "{read_token}", "{write_token}",
                          {timestamp}, false)"""
-            insert_query(db, query)
+            insert_update_query(db, query)
             query = f"""SELECT * FROM dirs
                     WHERE name="{new_folder}" and parent_id={parent_id}
                     """
@@ -136,7 +139,7 @@ def make_path(path, username, db, client, user_public_key, user_base_dir_id):
             folder_id = folder[0]
             query = f"""INSERT INTO dirs_access (dir_id, username, owner, rw)
                         VALUES ({folder_id}, "{username}", true, true)"""
-            insert_query(db, query)
+            insert_update_query(db, query)
             message = f"D||set||dir||{folder_id}||{write_token}"
             cipher = encrypt_and_sign(message, private_key, user_public_key)
             client.send(cipher)
@@ -149,7 +152,42 @@ def make_path(path, username, db, client, user_public_key, user_base_dir_id):
     return True
 
 
-def secure_file_system(client, username, user_public_key, db):
+def make_empty_file(path, name):
+    f = open(os.path.join(path, name), 'w')
+    f.close()
+
+
+def make_file(path, file_name, username, db):
+    metadata = get_folder_metadata(path)
+    file_name_hash = rsa.encrypt(str.encode(file_name), public_key).hex()
+    make_empty_file(path, file_name_hash)
+    file_hash = hash_file(file_name_hash)
+    folder_id = metadata[0]
+    timestamp = get_timestamp()
+    metadata[1] = str(timestamp)
+    metadata[2] = str(int(metadata[2]) + 1)
+    metadata.append(f"{file_name_hash} {file_hash}")
+    metadata = "\n".join(metadata)
+    write_meta(path, metadata, public_key)
+    query = f"""UPDATE dirs
+    set timestamp={timestamp}
+    WHERE id={folder_id}"""
+    insert_update_query(db, query)
+    read_token = gen_nonce()
+    write_token = gen_nonce()
+    query = f"""INSERT INTO files (name, dir_id, read_token, write_token)
+    VALUES ("{file_name}", {folder_id}, "{read_token}", "{write_token}")"""
+    insert_update_query(db, query)
+    query = f'SELECT * FROM files WHERE dir_id={folder_id} and name="{file_name}"'
+    file = db.execute(query).fetchone()
+    file_id = file[0]
+    query = f"""INSERT INTO files_access (file_id, username, owner, rw)
+    VALUES ({file_id}, "{username}", true, true)"""
+    insert_update_query(db, query)
+    return True
+
+
+def secure_file_system(client, username, user_public_key, db, base_path):
     query = f'SELECT * FROM accounts WHERE username="{username}"'
     user = db.execute(query).fetchone()
     base_dir_id = user[4]
@@ -165,16 +203,30 @@ def secure_file_system(client, username, user_public_key, db):
         if not ok:
             continue
         cmd_type = cmd_split[0]
-        if cmd_type == 'mkdir':  # mkdir$path$password$timestamp
+        if cmd_type == 'mkdir':  # mkdir||path||password||timestamp
             path = cmd_split[1]
             ra_cwd = os.getcwd()
-            res = make_path(path, username, db, client, user_public_key, base_dir_id)
+            res = make_path(path, username, db, client, user_public_key, base_dir_id, base_path)
             os.chdir(ra_cwd)
             if res:
                 message = 'M||Folder Created Successfully'
                 cipher = encrypt_and_sign(message, private_key, user_public_key)
                 client.send(cipher)
                 sleep(1)
+        elif cmd_type == 'touch':  #touch||path||password||timestamp
+            path = cmd_split[1]
+            (path, file_name) = os.path.split(path)
+            ra_cwd = os.getcwd()
+            res = make_path(path, username, db, client, user_public_key, base_dir_id, base_path)
+            if res:
+                res = make_file(os.getcwd(), file_name, username, db)
+                if res:
+                    message = 'M||File Created Successfully'
+                    cipher = encrypt_and_sign(message, private_key, user_public_key)
+                    client.send(cipher)
+            os.chdir(ra_cwd)
+
+
 
         # elif command.startswith('touch'):
         # elif command.startswith('cd'):
@@ -269,15 +321,15 @@ def threaded_client(client):  # Authentication
             write_token = gen_nonce()
             query = f"""INSERT INTO dirs (name, parent_id, read_token, write_token, timestamp, base)
             VALUES ("{username}", 1, "{read_token}", "{write_token}", {timestamp}, true)"""
-            insert_query(db, query)
+            insert_update_query(db, query)
             query = f'SELECT * FROM dirs WHERE parent_id=1 and name="{username}"'
             folder = db.execute(query).fetchone()
             folder_id = folder[0]
             query = f"""INSERT INTO accounts 
             VALUES ("{username}", "{first_name}", "{last_name}", "{password}", {folder_id})"""
-            insert_query(db, query)
+            insert_update_query(db, query)
             query = f'INSERT INTO dirs_access VALUES ({folder_id}, "{username}", false, false)'
-            insert_query(db, query)
+            insert_update_query(db, query)
             message = 'M||Registration successful'
             cipher = encrypt_and_sign(message, private_key, user_public_key)
             client.send(cipher)
@@ -299,7 +351,7 @@ def threaded_client(client):  # Authentication
                 cipher = encrypt_and_sign(message, private_key, user_public_key)
                 client.send(cipher)
                 print('Connected : ', username)
-                secure_file_system(client, username, user_public_key, db)
+                secure_file_system(client, username, user_public_key, db, os.getcwd())
             else:
                 message = 'M||Incorrect Password'
                 cipher = encrypt_and_sign(message, private_key, user_public_key)
