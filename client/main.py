@@ -33,7 +33,7 @@ client.send(encrypt_and_sign(message, private_key, server_public_key))
 while True:
     # try:
     cipher = client.recv(2048)
-    ok, message_split = check_sign_and_timestamp(cipher, private_key, server_public_key, client)
+    ok, message_split = check_sign_and_timestamp(client, cipher, private_key, server_public_key)
     if not ok:
         continue
     message_type = message_split[0]
@@ -125,7 +125,7 @@ while True:
         else:
             cmd_split = cmd.split(' ')
             cmd_type = cmd_split[0]
-            if cmd_type == 'mkdir' or cmd_type == 'touch':
+            if cmd_type == 'mkdir' or cmd_type == 'touch' or cmd_type == 'cd':
                 path = cmd_split[1]
                 message = f"{cmd_type}||{path}"
                 cipher = encrypt_and_sign(message, private_key, server_public_key)

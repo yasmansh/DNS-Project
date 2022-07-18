@@ -1,39 +1,39 @@
-import hashlib
 import sqlite3
 import os
-import random
-import string
-from utils import get_timestamp, random_string, encrypt_message, gen_nonce, insert_update_query, write_meta
+from utils import get_timestamp, gen_nonce
+from db_utils import insert_update_query
+from meta_utils import write_meta
 import rsa
 
 db = sqlite3.connect('server.db')
 
-db.execute("""CREATE TABLE dirs
+db.execute("""CREATE TABLE folders
                 (id INTEGER PRIMARY KEY AUTOINCREMENT, name text, parent_id int,
                  read_token char(64), write_token char(64), timestamp BIGINT, base BOOLEAN,
-                FOREIGN KEY (parent_id) REFERENCES dirs(id))
+                FOREIGN KEY (parent_id) REFERENCES folders(id))
                 """)
 
-db.execute("""CREATE TABLE dirs_access
-                (dir_id int, username varchar(32), owner BOOLEAN, rw BOOLEAN,
-                FOREIGN KEY (dir_id) REFERENCES dirs(id))
+db.execute("""CREATE TABLE folders_access
+                (folder_id int, username varchar(32), owner BOOLEAN, rw BOOLEAN,
+                FOREIGN KEY (folder_id) REFERENCES folders(id))
                 """)
 
 db.execute("""CREATE TABLE files
-                (id INTEGER PRIMARY KEY AUTOINCREMENT, name text, dir_id int,
+                (id INTEGER PRIMARY KEY AUTOINCREMENT, name text, folder_id int,
                 read_token char(64), write_token char(64),
-                FOREIGN KEY (dir_id) REFERENCES dirs(id))
+                FOREIGN KEY (folder_id) REFERENCES folders(id))
                 """)
 
 db.execute("""CREATE TABLE files_access
                 (file_id int, username varchar(32), owner BOOLEAN, rw BOOLEAN,
-                FOREIGN KEY (file_id) REFERENCES files(id))
+                FOREIGN KEY (file_id) REFERENCES folders(id))
                 """)
 
 db.execute("""CREATE TABLE accounts
                 (username varchar(32) primary key, first_name varchar(32), last_name varchar(32),
-                 password char(64), base_dir int,
-                 FOREIGN KEY (base_dir) REFERENCES dirs(id))
+                 password char(64), base_folder int,
+                 public_key varchar(700), host char(20), ip char(20),
+                 FOREIGN KEY (base_folder) REFERENCES folders(id))
                 """)
 
 public_key, private_key = rsa.newkeys(512)
@@ -50,7 +50,7 @@ with open("PR_server.pem", "ab") as f:
 read_token = gen_nonce()
 write_token = gen_nonce()
 ts = get_timestamp()
-query = f"""INSERT INTO dirs (id, name, parent_id, read_token, write_token, timestamp, base)
+query = f"""INSERT INTO folders (id, name, parent_id, read_token, write_token, timestamp, base)
 VALUES (1, 'Directory', 1, "{read_token}", "{write_token}", {ts}, false)"""
 insert_update_query(db, query)
 content = f"""1
