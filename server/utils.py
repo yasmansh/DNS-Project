@@ -88,6 +88,10 @@ def hash_file(filename: str) -> str:
 
 def send_message(client: socket.socket, message: str, user_public_key: rsa.PublicKey,
                  private_key: rsa.PrivateKey) -> None:
+    """
+
+    :rtype: None
+    """
     cipher = encrypt_and_sign(message, private_key, user_public_key)
     client.send(cipher)
 

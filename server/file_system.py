@@ -1,106 +1,59 @@
 import os
+import socket
+import sqlite3
+from typing import Optional
+
 import rsa
+from rsa import PublicKey
 from time import sleep
 from db_utils import *
 from meta_utils import *
 from utils import *
 
 
-def get_full_path(db, folder_id):
-    res = ''
-    while folder_id != 1:
+def get_absolute_path_folders(db: sqlite3.Connection, folder_id: int) -> list:
+    res = []
+    folder = get_folder_by_id(db, folder_id)
+    while folder is not None:
+        res.append(folder)
+        folder_id = folder['parent_id']
         folder = get_folder_by_id(db, folder_id)
-        folder_name = folder[1]
-        folder_parent = folder[2]
-        res = os.path.join(folder_name, res)
-        folder_id = folder_parent
+    res.reverse()
     return res
 
 
-def find_dir_name(path, name, private_key):
-    list_dir = os.listdir(path)
-    for cipher in list_dir:
-        if os.path.isdir(cipher):
-            real_name = rsa.decrypt(bytes.fromhex(cipher), private_key).decode()
-            if real_name == name:
+def get_relative_path_string(absolute_folders: list) -> str:
+    res = ''
+    for folder in absolute_folders:
+        res = os.path.join(res, folder['name'])
+    return res
+
+
+def get_absolute_path_string(absolute_folders: list) -> str:
+    res = get_relative_path_string(absolute_folders)
+    res = os.path.join(os.getcwd(), res)
+    return res
+
+
+def get_encrypted_folder_name(absolute_path: str, name: str, private_key: rsa.PrivateKey) -> Optional[str]:
+    files_and_folders = os.listdir(absolute_path)
+    for cipher in files_and_folders:
+        if not cipher.startswith('.') and os.path.isdir(os.path.join(absolute_path, cipher)):
+            raw_name = rsa.decrypt(bytes.fromhex(cipher), private_key).decode()
+            if name == raw_name:
                 return cipher
     return None
 
 
-def check_client_has_access_to_dir(db, username, dir_id):
-    access = get_folder_access(db, dir_id, username)
-    if access is None:
-        return False, ''
-    access_level = 'rw' if access == 1 else 'r'
-    return True, access_level
-
-
-def make_empty_dir(dir_name, parent_id, db, username, client, user_public_key, public_key, private_key):
-    dir_name_encrypted = rsa.encrypt(dir_name.encode(), public_key).hex()
-    timestamp = get_timestamp()
-    write_token = gen_nonce()
-    insert_into_folders(db, dir_name, parent_id, "false", timestamp=timestamp, write_token=write_token)
-    folder = get_folder_by_name_and_parent(db, dir_name, parent_id)
-    folder_id = folder[0]
-    insert_into_folders_acess(db, folder_id, username, "true", "true")
-    message = f"D||set||dir||{folder_id}||{write_token}"
-    cipher = encrypt_and_sign(message, private_key, user_public_key)
-    client.send(cipher)
-    os.mkdir(dir_name_encrypted)
-    content = f"""{folder_id}
-{timestamp}
-1"""
-    write_meta(os.getcwd(), content, public_key)
-
-
-def make_path(path, username, db, client, user_public_key, user_base_dir_id, base_path, public_key, private_key):
-    path_split = path.split(os.path.sep)
-    if path_split[0] == '':
-        os.chdir(base_path)
-        path_split = path_split[1:]
-    for new_folder in path_split:
-        metadata = get_folder_metadata(os.getcwd(), private_key)
-        folder_id = eval(metadata[0])
-        folder_data = get_folder_by_id(db, folder_id)
-        folder_base = folder_data[6]
-        if new_folder == '.' or new_folder == '':
-            continue
-        elif new_folder == '..':
-            if folder_base != 1:
-                os.chdir(os.path.join(os.getcwd(), '..'))
-            continue
-        parent_id = folder_id if folder_id != 1 else user_base_dir_id
-        new_folder_data = get_folder_by_name_and_parent(db, new_folder, parent_id)
-        if new_folder_data is not None:
-            new_folder_name = find_dir_name(os.getcwd(), new_folder, private_key)
-            os.chdir(new_folder_name)
-            data_split = get_folder_metadata(os.getcwd(), private_key)
-            dir_id = data_split[0]
-            access = get_folder_access(db, dir_id, username)
-            rw = access[3]
-            if rw == 0:
-                message = f"M||You don't have required access.\n|"
-                cipher = encrypt_and_sign(message, private_key, user_public_key)
-                client.send(cipher)
-                return False
-            message = f"D||get||dir||{dir_id}"
-            cipher = encrypt_and_sign(message, private_key, user_public_key)
-            client.send(cipher)
-            cipher = client.recv(2048)
-            ok, message_split = check_sign_and_timestamp(cipher, private_key, user_public_key, client)
-            if not ok:
-                break
-            ticket = message_split[0]
-            response = get_folder_by_id(db, dir_id)
-            nonce = response[4]
-            if ticket != nonce:
-                message = "M||You don't have required access.\n|"
-                cipher = encrypt_and_sign(message, private_key, user_public_key)
-                client.send(cipher)
-                return False
-        else:
-            make_empty_dir(new_folder, parent_id, db, username, client, user_public_key, public_key, private_key)
-    return True
+def get_encrypted_absolute_path(absolute_folders: list, private_key: rsa.PrivateKey) -> str:
+    res = ''
+    for folder in absolute_folders[1:]:
+        folder_name = folder['name']
+        encrypted_name = get_encrypted_folder_name(os.path.join(os.getcwd(), res), folder_name, private_key)
+        # error handling
+        res = os.path.join(res, encrypted_name)
+    res = os.path.join(os.getcwd(), res)
+    return res
 
 
 def make_empty_file(path, name):
@@ -108,78 +61,154 @@ def make_empty_file(path, name):
     f.close()
 
 
-def goto_path(path, base_path, current_dir_id, db, client, username, private_key):
+def goto_path(db: sqlite3.Connection, client: socket.socket, path: str, current_folder_id: int, username: str,
+              private_key: rsa.PrivateKey):
     path_split = path.split(os.path.sep)
+    user = get_user_by_username(db, username)
     if path_split[0] == '':
-        os.chdir(base_path)
         path_split = path_split[1:]
-        user = get_user_by_username(db, username)
-        user_base_dir = user[4]
-        current_dir_id = user_base_dir
-        os.chdir(base_path)
-    for dir_name in path_split:
-        if dir_name == '.' or dir_name == '':
+        user_base_dir = user['base_folder_id']
+        current_folder_id = user_base_dir
+    absolute_path_folders = get_absolute_path_folders(db, current_folder_id)
+    absolute_path_encrypted = get_encrypted_absolute_path(absolute_path_folders, private_key)
+    for new_folder_name in path_split:
+        if new_folder_name == '.' or new_folder_name == '':
             continue
-        elif dir_name == '..':
-            metadata = get_folder_metadata(os.getcwd(), private_key)
-            parent_dir_id = get_folder_by_id(db, metadata[0])[2]
-            if current_dir_id == 1 or parent_dir_id == 1:
+        folder = get_folder_by_id(db, current_folder_id)
+        parent_folder_id = folder['parent_id']
+        if new_folder_name == '..':
+            if parent_folder_id is None:
                 continue
-            os.chdir(dir_name)
-            metadata = get_folder_metadata(os.getcwd(), private_key)
-            current_dir_id = metadata[0]
+            current_folder_id = parent_folder_id
         else:
-            dir_cipher = find_dir_name(os.getcwd(), dir_name, private_key)
-            if dir_cipher is None:
+            folder_cipher = get_encrypted_folder_name(absolute_path_encrypted,
+                                                      new_folder_name, private_key)
+            if folder_cipher is None:
+                message = f"Folder {new_folder_name} Doesn't Exists"
+                user_public_key = eval(user['public_key'])
+                send_message(client, message, user_public_key, private_key)
                 return False, -1
             else:
-                os.chdir(dir_cipher)
-                metadata = get_folder_metadata(os.getcwd(), private_key)
-                current_dir_id = metadata[0]
-                if not check_client_has_access_to_dir(db, username, current_dir_id):
-                    return False, -1
-    return True, current_dir_id
+                absolute_path_encrypted = os.path.join(absolute_path_encrypted, folder_cipher)
+                metadata = get_folder_metadata(absolute_path_encrypted, private_key)
+                current_folder_id = metadata['folder_id']
+    return True, current_folder_id
 
 
-def make_file(path, file_name, username, db, public_key):
-    metadata = get_folder_metadata(path, public_key)
-    file_name_hash = rsa.encrypt(str.encode(file_name), public_key).hex()
-    make_empty_file(path, file_name_hash)
-    file_hash = hash_file(file_name_hash)
-    folder_id = metadata[0]
-    timestamp = get_timestamp()
-    metadata[1] = str(timestamp)
-    metadata[2] = str(int(metadata[2]) + 1)
-    metadata.append(f"{file_name_hash} {file_hash}")
-    metadata = "\n".join(metadata)
-    write_meta(path, metadata, public_key)
-    query = f"""UPDATE dirs
-    set timestamp={timestamp}
-    WHERE id={folder_id}"""
-    insert_update_query(db, query)
+def make_file(client: socket.socket, db: sqlite3.Connection, path: str, file_name: str, username: str,
+              public_key: rsa.PublicKey, private_key: rsa.PrivateKey):
+    file_name_encrypted = rsa.encrypt(str.encode(file_name), public_key).hex()
+    make_empty_file(path, file_name_encrypted)
+    file_hash = hash_file(os.path.join(path, file_name_encrypted))
+    metadata = get_folder_metadata(path, private_key)
+    folder_id = metadata['folder_id']
+    add_file_to_meta(db, path, file_name_encrypted, file_hash, public_key, private_key)
     read_token = gen_nonce()
     write_token = gen_nonce()
-    query = f"""INSERT INTO files (name, dir_id, read_token, write_token)
-    VALUES ('{file_name}', {folder_id}, '{read_token}', '{write_token}')"""
-    insert_update_query(db, query)
-    query = f"SELECT * FROM files WHERE dir_id={folder_id} and name='{file_name}'"
-    file = db.execute(query).fetchone()
-    file_id = file[0]
-    query = f"""INSERT INTO files_access (file_id, username, owner, rw)
-    VALUES ({file_id}, '{username}', true, true)"""
-    insert_update_query(db, query)
+    insert_into_files(db,
+                      file_name=file_name,
+                      folder_id=folder_id,
+                      read_token=read_token,
+                      write_token=write_token)
+    file = get_file_by_name_and_folder_id(db, file_name, folder_id)
+    file_id = file['id']
+    insert_into_files_access(db,
+                             file_id=file_id,
+                             username=username,
+                             owner="true",
+                             rw="true")
+    user = get_user_by_username(db, username)
+    user_public_key = eval(user['public_key'])
+    message = f"M||File with id {file_id} Created Successfully"
+    send_message(client, message, user_public_key, private_key)
     return True
 
 
-def secure_file_system(client, username, user_public_key, db, base_path, public_key, private_key):
+def make_empty_dir(db: sqlite3.Connection, folder_name: str, parent_id: int,
+                   public_key: rsa.PublicKey, private_key: rsa.PrivateKey):
+    absolute_path_folder = get_absolute_path_folders(db, parent_id)
+    absolute_encrypted_path = get_encrypted_absolute_path(absolute_path_folder, private_key)
+    new_folder_name_encrypted = rsa.encrypt(folder_name.encode(), public_key).hex()
+    timestamp = get_timestamp()
+    insert_into_folders(db,
+                        name=folder_name,
+                        base="false",
+                        parent_id=parent_id,
+                        timestamp=timestamp)
+    folder = get_folder_by_name_and_parent(db, folder_name, parent_id)
+    folder_id = folder['id']
+    new_folder_absolute_path = os.path.join(absolute_encrypted_path, new_folder_name_encrypted)
+    os.mkdir(new_folder_absolute_path)
+    content = f"""{folder_id}
+{timestamp}
+1"""
+    write_meta(new_folder_absolute_path, content, public_key)
+    return True, folder_id
+
+
+def mkdir(db: sqlite3.Connection, client: socket.socket, user: dict, path: str, current_folder_id: int,
+          public_key: rsa.PublicKey, private_key: rsa.PrivateKey, user_public_key: rsa.PublicKey) -> tuple:
+    path_split = path.split(os.path.sep)
+    exists = False
+    if path_split[0] == '':
+        current_folder_id = user['base_folder_id']
+        path_split = path_split[1:]
+    for new_folder_name in path_split:
+        folder = get_folder_by_id(db, current_folder_id)
+        folder_id = folder['id']
+        folder_parent_id = folder['parent_id'] if folder is not None else user['base_folder_id']
+        if new_folder_name == '.' or new_folder_name == '':
+            continue
+        elif new_folder_name == '..':
+            if folder_parent_id is not None:
+                current_folder_id = folder_parent_id
+            continue
+        new_folder = get_folder_by_name_and_parent(db, new_folder_name, folder_id)
+        if new_folder is not None:
+            current_folder_id = new_folder['id']
+        else:
+            ok, new_folder_id = make_empty_dir(db, new_folder_name, folder_id, public_key, private_key)
+            if ok:
+                current_folder_id = new_folder_id
+                message = f"M||Folder with id {new_folder_id} Created Successfully"
+                send_message(client, message, user_public_key, private_key)
+                exists = True
+    if not exists:
+        message = "M||Folder Already Exists"
+        send_message(client, message, user_public_key, private_key)
+    absolute_path_folders = get_absolute_path_folders(db, current_folder_id)
+    absolute_path_encrypted = get_encrypted_absolute_path(absolute_path_folders, private_key)
+    return True, absolute_path_encrypted
+
+
+def ls(db: sqlite3.Connection, client: socket.socket, path: str, current_folder_id: int,
+       username: str, private_key: rsa.PrivateKey):
+    print(current_folder_id, '=======', path)
+    res, cdi = goto_path(db, client, path, current_folder_id, username, private_key)
+    if res:
+        current_folder_id = cdi
+        print(current_folder_id, '--------')
+        absolute_path_folders = get_absolute_path_folders(db, current_folder_id)
+        absolute_path_encrypted = get_encrypted_absolute_path(absolute_path_folders, private_key)
+        list_files_cipher = os.listdir(absolute_path_encrypted)
+        list_files_cipher = filter(lambda x: not x.startswith('.'), list_files_cipher)
+        list_files = [rsa.decrypt(bytes.fromhex(i), private_key).decode() for i in list_files_cipher]
+        seperator = '\n'
+        list_files_string = seperator.join(list_files)
+        message = f"M||{list_files_string}"
+        user = get_user_by_username(db, username)
+        user_public_key = eval(user['public_key'])
+        send_message(client, message, user_public_key, private_key)
+
+
+def secure_file_system(client: socket.socket, username: str, db: sqlite3.Connection, user_public_key: rsa.PublicKey,
+                       public_key: rsa.PublicKey, private_key: rsa.PrivateKey):
     user = get_user_by_username(db, username)
-    base_dir_id = user[4]
-    current_folder = os.getcwd()
-    current_folder_id = 1
-    base_dir = get_folder_by_id(db, base_dir_id)
-    current_dir_id = base_dir_id
+    base_folder_id = user['base_folder_id']
+    current_folder_id = base_folder_id
     while True:
-        message = f"I||{get_full_path(db, current_dir_id)}>"
+        absolute_path_folders = get_absolute_path_folders(db, current_folder_id)
+        message = f"I||{get_relative_path_string(absolute_path_folders)}>"
         send_message(client, message, user_public_key, private_key)
         ok, cmd_split = get_message(client, user_public_key, private_key)
         if not ok:
@@ -187,41 +216,20 @@ def secure_file_system(client, username, user_public_key, db, base_path, public_
         cmd_type = cmd_split[0]
         if cmd_type == 'mkdir':  # mkdir||path||password||timestamp
             path = cmd_split[1]
-            (path, final_dir) = os.path.split(path)
-            ra_cwd = os.getcwd()
-            res = make_path(path, username, db, client, user_public_key, base_dir_id, base_path, public_key,
-                            private_key)
-            if res:
-                # check folder exists
-                message = 'M||Folder Created Successfully'
-                cipher = encrypt_and_sign(message, private_key, user_public_key)
-                client.send(cipher)
-                sleep(1)
-            os.chdir(ra_cwd)
+            mkdir(db, client, user, path, current_folder_id, public_key, private_key, user_public_key)
         elif cmd_type == 'touch':  # touch||path||password||timestamp
             path = cmd_split[1]
             (path, file_name) = os.path.split(path)
-            ra_cwd = os.getcwd()
-            res = make_path(path, username, db, client, user_public_key, base_dir_id, base_path, public_key,
-                            private_key)
-            if res:
-                res = make_file(os.getcwd(), file_name, username, db, public_key)
-                if res:
-                    message = 'M||File Created Successfully'
-                    cipher = encrypt_and_sign(message, private_key, user_public_key)
-                    client.send(cipher)
-                    sleep(1)
-            os.chdir(ra_cwd)
+            ok, absolute_path_encrypted = mkdir(db, client, user, path, current_folder_id,
+                                                public_key, private_key, user_public_key)
+            if ok:
+                make_file(client, db, absolute_path_encrypted, file_name, username, public_key, private_key)
         elif cmd_type == 'cd':
-            ra_cwd = os.getcwd()
             path = cmd_split[1]
-            res, cdi = goto_path(path, base_path, current_dir_id, db, client, username, private_key)
-            if not res:
-                os.chdir(ra_cwd)
-                message = f"M||Path doesn't Exist"
-                cipher = encrypt_and_sign(message, private_key, user_public_key)
-                client.send(cipher)
-                sleep(1)
-            else:
-                current_dir_id = cdi
+            res, cdi = goto_path(db, client, path, current_folder_id, username, private_key)
+            if res:
+                current_folder_id = cdi
+        elif cmd_type == 'ls':
+            path = cmd_split[1]
+            ls(db, client, path, current_folder_id, username, private_key)
     client.close(0)

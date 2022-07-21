@@ -32,19 +32,18 @@ def signup(client: socket.socket, address: tuple, db: sqlite3.Connection, cmd_sp
     username = cmd_split[3]
     password = cmd_split[4]
     user = get_user_by_username(db, username)
-    (user_host, user_ip) = address
+    (user_host, user_port) = address
     if user is not None:
         message = 'M||This username is already existed. Please enter another one!'
         send_message(client, message, user_public_key, private_key)
         return
     insert_into_folders(db,
                         name=username,
-                        parent_id=1,
                         base="true",
                         )
     folder = get_folder_by_name_and_parent(db,
                                            name=username,
-                                           parent_id=1)
+                                           parent_id=None)
     folder_id = folder['id']
     insert_into_accounts(db,
                          username=username,
@@ -54,22 +53,17 @@ def signup(client: socket.socket, address: tuple, db: sqlite3.Connection, cmd_sp
                          base_folder_id=folder_id,
                          public_key=user_public_key,
                          host=user_host,
-                         ip=user_ip)
-    insert_into_folders_acess(db,
-                              folder_id=folder_id,
-                              username=username,
-                              owner="false",
-                              rw="false")
+                         port=user_port)
     message = 'M||Registration successful'
     send_message(client, message, user_public_key, private_key)
 
 
-def login(client: socket.socket, address: tuple, db: sqlite3.Connection, cmd_split: list,
-          user_public_key: rsa.PublicKey) -> None:
+def login(client: socket.socket, address: tuple, db: sqlite3.Connection, cmd_split: list) -> None:
     username = cmd_split[1]
     password = cmd_split[2]
-    (user_host, user_ip) = address
+    (user_host, user_port) = address
     user = get_user_by_username(db, username)
+    user_public_key = eval(user['public_key'])
     if user is None:
         message = 'M||Incorrect username'
         send_message(client, message, user_public_key, private_key)
@@ -81,10 +75,10 @@ def login(client: socket.socket, address: tuple, db: sqlite3.Connection, cmd_spl
                     username=username,
                     public_key=user_public_key,
                     host=user_host,
-                    ip=user_ip)
+                    port=user_port)
         send_message(client, message, user_public_key, private_key)
         print('Connected : ', username)
-        secure_file_system(client, username, user_public_key, db, os.getcwd(), public_key, private_key)
+        secure_file_system(client, username, db, user_public_key, public_key, private_key)
     else:
         message = 'M||Incorrect Password'
         send_message(client, message, user_public_key, private_key)
@@ -106,11 +100,12 @@ def threaded_client(client: socket.socket, address):  # Authentication
         if cmd_type == '1':
             signup(client, address, db, cmd_split, user_public_key)
         elif cmd_type == '2':
-            login(client, address, db, cmd_split, user_public_key)
+            login(client, address, db, cmd_split)
         elif cmd_type == '3':
             print('client disconnected.|')
             break
         else:
+            # send message to client
             print("Not understand|")
     client.close()
 

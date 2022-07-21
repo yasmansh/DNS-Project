@@ -16,7 +16,7 @@ def get_user_by_username(db: sqlite3.Connection, username: str) -> dict:
         'base_folder_id': user_tuple[4],
         'public_key': user_tuple[5],
         'host': user_tuple[6],
-        'ip': user_tuple[7],
+        'port': user_tuple[7],
     } if user_tuple is not None else None
     return user_dict
 
@@ -26,41 +26,29 @@ def folder_tuple_to_folder_dict(folder_tuple: tuple) -> dict:
         'id': folder_tuple[0],
         'name': folder_tuple[1],
         'parent_id': folder_tuple[2],
-        'read_token': folder_tuple[3],
-        'write_token': folder_tuple[4],
-        'timestamp': folder_tuple[5],
-        'is_base': folder_tuple[6],
+        'timestamp': folder_tuple[3],
+        'is_base': folder_tuple[4],
     } if folder_tuple is not None else None
     return folder_dict
 
 
 def get_folder_by_id(db: sqlite3.Connection, folder_id: int):
-    query = f"SELECT * FROM folders WHERE id={folder_id}"
+    folder_query = f'={folder_id}' if folder_id is not None else ' IS NULL'
+    query = f"SELECT * FROM folders WHERE id{folder_query}"
     folder_tuple = db.execute(query).fetchone()
     folder_dict = folder_tuple_to_folder_dict(folder_tuple)
     return folder_dict
 
 
 def get_folder_by_name_and_parent(db: sqlite3.Connection, name: str, parent_id: int):
-    query = f'SELECT * FROM folders WHERE name="{name}" and parent_id={parent_id}'
+    parent_query = f'parent_id={parent_id}' if parent_id is not None else 'parent_id IS NULL'
+    query = f'SELECT * FROM folders WHERE name="{name}" and {parent_query}'
     folder_tuple = db.execute(query).fetchone()
     folder_dict = folder_tuple_to_folder_dict(folder_tuple)
     return folder_dict
 
 
-def get_folder_access(db: sqlite3.Connection, folder_id: int, username: str) -> dict:
-    query = f"SELECT * FROM folders_access WHERE folder_id={folder_id} and username='{username}' "
-    folder_access_tuple = db.execute(query).fetchone()
-    folder_access_dict = {
-        'id': folder_access_tuple[0],
-        'username': folder_access_tuple[1],
-        'owner': folder_access_tuple[2],
-        'rw': folder_access_tuple[3],
-    } if folder_access_tuple is not None else None
-    return folder_access_dict
-
-
-def git_file_by_name_and_folder_id(db: sqlite3.Connection, name: str, folder_id: int) -> dict:
+def get_file_by_name_and_folder_id(db: sqlite3.Connection, name: str, folder_id: int) -> dict:
     query = f"SELECT * FROM files WHERE name='{name}' and folder_id={folder_id}"
     file_tuple = db.execute(query).fetchone()
     file_dict = {
@@ -85,41 +73,52 @@ def get_file_access(db: sqlite3.Connection, file_id: int, username: str) -> dict
     return file_access_dict
 
 
-def insert_into_folders(db: sqlite3.Connection, name: str, parent_id: int, base: str,
-                        read_token: str = None, write_token: str = None, timestamp: int = None):
+def insert_into_folders(db: sqlite3.Connection, name: str, base: str,
+                        parent_id: int = None, timestamp: int = None):
+    if parent_id is None:
+        parent_id = "null"
     if timestamp is None:
         timestamp = get_timestamp()
-    if read_token is None:
-        read_token = gen_nonce()
-    if write_token is None:
-        write_token = gen_nonce()
-    query = f"""INSERT INTO folders (name, parent_id, read_token, write_token, timestamp, base)
-            VALUES ("{name}", {parent_id}, "{read_token}", "{write_token}",
-            {timestamp}, {base})"""
+    query = f"""INSERT INTO folders (name, parent_id, timestamp, base)
+            VALUES ("{name}", {parent_id}, {timestamp}, {base})"""
     insert_update_query(db, query)
 
 
 def insert_into_accounts(db: sqlite3.Connection, username: str, first_name: str, last_name: str,
                          password: str, base_folder_id: int, public_key: rsa.PublicKey,
-                         host: str, ip: str):
+                         host: str, port: str) -> None:
     query = f"""INSERT INTO accounts (username, first_name, last_name, password, base_folder, 
-                    public_key, host, ip) 
+                    public_key, host, port) 
                 VALUES ('{username}', '{first_name}', '{last_name}', '{password}', {base_folder_id},
-                '{public_key}', '{host}', '{ip}')"""
+                '{public_key}', '{host}', '{port}')"""
     insert_update_query(db, query)
 
 
-def insert_into_folders_acess(db: sqlite3.Connection, folder_id: int, username: str, owner: str, rw: str):
-    query = f"""INSERT INTO folders_access (folder_id, username, owner, rw)
-            VALUES ({folder_id}, "{username}", {owner}, {rw})"""
+def insert_into_files(db: sqlite3.Connection, file_name: str, folder_id: int,
+                      read_token: str, write_token: str) -> None:
+    query = f"""INSERT INTO files (name, folder_id, read_token, write_token)
+        VALUES ('{file_name}', {folder_id}, '{read_token}', '{write_token}')"""
+    insert_update_query(db, query)
+
+
+def insert_into_files_access(db: sqlite3.Connection, file_id: int, username: str, owner: str, rw: str) -> None:
+    query = f"""INSERT INTO files_access (file_id, username, owner, rw)
+        VALUES ({file_id}, '{username}', {owner}, {rw})"""
     insert_update_query(db, query)
 
 
 def update_user(db: sqlite3.Connection, username: str,
-                public_key: rsa.PublicKey, host: str, ip: str) -> None:
+                public_key: rsa.PublicKey, host: str, port: str) -> None:
     query = f"""UPDATE accounts
-            SET public_key="{public_key}", host="{host}", ip="{ip}"
+            SET public_key="{public_key}", host="{host}", port="{port}"
              WHERE username="{username}" """
+    insert_update_query(db, query)
+
+
+def update_folder_timestamp(db: sqlite3.Connection, folder_id: int, timestamp: int) -> None:
+    query = f"""UPDATE folders
+        set timestamp={timestamp}
+        WHERE id={folder_id}"""
     insert_update_query(db, query)
 
 
