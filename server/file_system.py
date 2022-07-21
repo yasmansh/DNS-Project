@@ -2,7 +2,7 @@ import os
 import socket
 import sqlite3
 from typing import Optional
-
+import shutil
 import rsa
 from rsa import PublicKey
 from time import sleep
@@ -181,24 +181,57 @@ def mkdir(db: sqlite3.Connection, client: socket.socket, user: dict, path: str, 
     return True, absolute_path_encrypted
 
 
+def get_list_files_by_folder_id(db: sqlite3.Connection, current_folder_id: int,
+                                private_key: rsa.PrivateKey):
+    absolute_path_folders = get_absolute_path_folders(db, current_folder_id)
+    absolute_path_encrypted = get_encrypted_absolute_path(absolute_path_folders, private_key)
+    list_files_cipher = os.listdir(absolute_path_encrypted)
+    list_files_cipher = filter(lambda x: not x.startswith('.'), list_files_cipher)
+    list_files = [rsa.decrypt(bytes.fromhex(i), private_key).decode() for i in list_files_cipher]
+    return list_files
+
+
 def ls(db: sqlite3.Connection, client: socket.socket, path: str, current_folder_id: int,
        username: str, private_key: rsa.PrivateKey):
-    print(current_folder_id, '=======', path)
     res, cdi = goto_path(db, client, path, current_folder_id, username, private_key)
     if res:
         current_folder_id = cdi
-        print(current_folder_id, '--------')
-        absolute_path_folders = get_absolute_path_folders(db, current_folder_id)
-        absolute_path_encrypted = get_encrypted_absolute_path(absolute_path_folders, private_key)
-        list_files_cipher = os.listdir(absolute_path_encrypted)
-        list_files_cipher = filter(lambda x: not x.startswith('.'), list_files_cipher)
-        list_files = [rsa.decrypt(bytes.fromhex(i), private_key).decode() for i in list_files_cipher]
+        list_files = get_list_files_by_folder_id(db, current_folder_id, private_key)
         seperator = '\n'
         list_files_string = seperator.join(list_files)
         message = f"M||{list_files_string}"
         user = get_user_by_username(db, username)
         user_public_key = eval(user['public_key'])
         send_message(client, message, user_public_key, private_key)
+
+
+def rm(db: sqlite3.Connection, client: socket.socket, path: str, username: str,
+       current_folder_id: int, name: str, file_or_folder: str,
+       public_key: rsa.PublicKey, private_key: rsa.PrivateKey) -> None:
+    res, current_folder_id = goto_path(db, client, path, current_folder_id, username, private_key)
+    if res:
+        absolute_path_folders = get_absolute_path_folders(db, current_folder_id)
+        absolute_path_encrypted = get_encrypted_absolute_path(absolute_path_folders, private_key)
+        list_files = filter(lambda x: not x.startswith('.'), os.listdir(absolute_path_encrypted))
+        metadata = get_folder_metadata(absolute_path_encrypted, private_key)
+        folder_id = metadata['folder_id']
+        if file_or_folder == 'file':
+            for file_name_cipher in list_files:
+                file_path = os.path.join(absolute_path_encrypted, file_name_cipher)
+                file_name = rsa.decrypt(bytes.fromhex(file_name_cipher), private_key).decode()
+                if os.path.isfile(file_path) and file_name == name:
+                    remove_file_from_metadata(db, path, file_name_cipher, public_key, private_key)
+                    delete_file_from_database(db, file_name, folder_id)
+                    os.remove(file_path)
+        elif file_or_folder == 'folder':
+            for folder_name_cipher in list_files:
+                folder_path = os.path.join(absolute_path_encrypted, folder_name_cipher)
+                folder_name = rsa.decrypt(bytes.fromhex(folder_name_cipher), private_key).decode()
+                if os.path.isdir(folder_path) and folder_name == name:
+                    metadata = get_folder_metadata(folder_path, private_key)
+                    folder_id = metadata['folder_id']
+                    shutil.rmtree(folder_path)
+                    delete_folder_from_database(db, folder_id)
 
 
 def secure_file_system(client: socket.socket, username: str, db: sqlite3.Connection, user_public_key: rsa.PublicKey,
@@ -219,7 +252,11 @@ def secure_file_system(client: socket.socket, username: str, db: sqlite3.Connect
             mkdir(db, client, user, path, current_folder_id, public_key, private_key, user_public_key)
         elif cmd_type == 'touch':  # touch||path||password||timestamp
             path = cmd_split[1]
-            (path, file_name) = os.path.split(path)
+            if len(path.split(os.path.sep)) == 1:
+                file_name = path
+                path = '.'
+            else:
+                (path, file_name) = os.path.split(path)
             ok, absolute_path_encrypted = mkdir(db, client, user, path, current_folder_id,
                                                 public_key, private_key, user_public_key)
             if ok:
@@ -232,4 +269,14 @@ def secure_file_system(client: socket.socket, username: str, db: sqlite3.Connect
         elif cmd_type == 'ls':
             path = cmd_split[1]
             ls(db, client, path, current_folder_id, username, private_key)
+        elif cmd_type == 'rm':
+            file_or_folder = cmd_split[1]
+            path = cmd_split[2]
+            if len(path.split(os.path.sep)) == 1:
+                name = path
+                path = '.'
+            else:
+                (path, name) = os.path.split(path)
+            rm(db, client, path, username, current_folder_id, name, file_or_folder,
+               public_key, private_key)
     client.close(0)

@@ -1,34 +1,36 @@
 import sqlite3
 import os
 from utils import get_timestamp, gen_nonce
-from db_utils import insert_update_query
+from db_utils import insert_update_delete_query
 from meta_utils import write_meta
 import rsa
 
 db = sqlite3.connect('server.db')
+db.execute("PRAGMA foreign_keys = ON")
 
 db.execute("""CREATE TABLE folders
                 (id INTEGER PRIMARY KEY AUTOINCREMENT, name text, parent_id int,
                  timestamp BIGINT, base BOOLEAN,
-                FOREIGN KEY (parent_id) REFERENCES folders(id))
+                FOREIGN KEY (parent_id) REFERENCES folders(id) ON DELETE CASCADE)
                 """)
 
 db.execute("""CREATE TABLE files
                 (id INTEGER PRIMARY KEY AUTOINCREMENT, name text, folder_id int,
                 read_token char(64), write_token char(64),
-                FOREIGN KEY (folder_id) REFERENCES folders(id))
+                FOREIGN KEY (folder_id) REFERENCES folders(id) ON DELETE CASCADE)
                 """)
 
 db.execute("""CREATE TABLE files_access
                 (file_id int, username varchar(32), owner BOOLEAN, rw BOOLEAN,
-                FOREIGN KEY (file_id) REFERENCES folders(id))
+                FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE,
+                FOREIGN KEY (username) REFERENCES accounts(username) ON DELETE CASCADE)
                 """)
 
 db.execute("""CREATE TABLE accounts
                 (username varchar(32) primary key, first_name varchar(32), last_name varchar(32),
                  password char(64), base_folder int,
                  public_key varchar(700), host char(20), port char(20),
-                 FOREIGN KEY (base_folder) REFERENCES folders(id))
+                 FOREIGN KEY (base_folder) REFERENCES folders(id) ON DELETE CASCADE)
                 """)
 
 
@@ -52,7 +54,7 @@ write_token = gen_nonce()
 ts = get_timestamp()
 query = f"""INSERT INTO folders (id, name, parent_id, timestamp, base)
 VALUES (1, 'Directory', 1, {ts}, false)"""
-insert_update_query(db, query)
+insert_update_delete_query(db, query)
 content = f"""1
 {ts}
 0"""

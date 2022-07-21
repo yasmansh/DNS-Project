@@ -1,7 +1,6 @@
 import hashlib
 import socket
 import sqlite3
-
 import rsa
 import os
 from server.utils import encrypt_and_sign, check_sign_and_timestamp
@@ -112,6 +111,15 @@ if __name__ == '__main__':
                     else:
                         path = cmd_split[1]
                     message = f"{cmd_type}||{path}"
+                    cipher = encrypt_and_sign(message, private_key, server_public_key)
+                    client.send(cipher)
+                elif cmd_type == 'rm':
+                    if cmd_split[1] == '-r':
+                        path = cmd_split[2]
+                        message = f"{cmd_type}||folder||{path}"
+                    else:
+                        path = cmd_split[1]
+                        message = f"{cmd_type}||file||{path}"
                     cipher = encrypt_and_sign(message, private_key, server_public_key)
                     client.send(cipher)
                 # else send message to server

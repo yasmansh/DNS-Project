@@ -81,7 +81,7 @@ def insert_into_folders(db: sqlite3.Connection, name: str, base: str,
         timestamp = get_timestamp()
     query = f"""INSERT INTO folders (name, parent_id, timestamp, base)
             VALUES ("{name}", {parent_id}, {timestamp}, {base})"""
-    insert_update_query(db, query)
+    insert_update_delete_query(db, query)
 
 
 def insert_into_accounts(db: sqlite3.Connection, username: str, first_name: str, last_name: str,
@@ -91,20 +91,20 @@ def insert_into_accounts(db: sqlite3.Connection, username: str, first_name: str,
                     public_key, host, port) 
                 VALUES ('{username}', '{first_name}', '{last_name}', '{password}', {base_folder_id},
                 '{public_key}', '{host}', '{port}')"""
-    insert_update_query(db, query)
+    insert_update_delete_query(db, query)
 
 
 def insert_into_files(db: sqlite3.Connection, file_name: str, folder_id: int,
                       read_token: str, write_token: str) -> None:
     query = f"""INSERT INTO files (name, folder_id, read_token, write_token)
         VALUES ('{file_name}', {folder_id}, '{read_token}', '{write_token}')"""
-    insert_update_query(db, query)
+    insert_update_delete_query(db, query)
 
 
 def insert_into_files_access(db: sqlite3.Connection, file_id: int, username: str, owner: str, rw: str) -> None:
     query = f"""INSERT INTO files_access (file_id, username, owner, rw)
         VALUES ({file_id}, '{username}', {owner}, {rw})"""
-    insert_update_query(db, query)
+    insert_update_delete_query(db, query)
 
 
 def update_user(db: sqlite3.Connection, username: str,
@@ -112,16 +112,26 @@ def update_user(db: sqlite3.Connection, username: str,
     query = f"""UPDATE accounts
             SET public_key="{public_key}", host="{host}", port="{port}"
              WHERE username="{username}" """
-    insert_update_query(db, query)
+    insert_update_delete_query(db, query)
 
 
 def update_folder_timestamp(db: sqlite3.Connection, folder_id: int, timestamp: int) -> None:
     query = f"""UPDATE folders
         set timestamp={timestamp}
         WHERE id={folder_id}"""
-    insert_update_query(db, query)
+    insert_update_delete_query(db, query)
 
 
-def insert_update_query(db, query):
+def delete_file_from_database(db: sqlite3.Connection, file_name: str, folder_id: int):
+    query = f'DELETE from files WHERE name="{file_name}" and folder_id={folder_id}'
+    insert_update_delete_query(db, query)
+
+
+def delete_folder_from_database(db: sqlite3.Connection, folder_id: int):
+    query = f'DELETE FROM folders WHERE id={folder_id}'
+    insert_update_delete_query(db, query)
+
+
+def insert_update_delete_query(db, query):
     db.execute(query)
     db.commit()

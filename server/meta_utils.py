@@ -40,7 +40,7 @@ def add_file_to_meta(db: sqlite3.Connection, path: str, file_name_encrypted: str
     metadata = get_folder_metadata(path, private_key)
     timestamp = get_timestamp()
     metadata['timestamp'] = str(timestamp)
-    folder_id = metadata['folder_id']
+    folder_id = int(metadata['folder_id'])
     number_of_files = int(metadata['number_of_files'])
     number_of_files += 1
     metadata['number_of_files'] = str(number_of_files)
@@ -66,3 +66,20 @@ def check_meta(path, timestamp, private_key):
         if not os.path.exists(file_path) or hash_file(file_path) != file_hash:
             return False
     return True
+
+
+def remove_file_from_metadata(db: sqlite3.Connection, path: str, cipher: str,
+                              public_key: rsa.PublicKey, private_key: rsa.PrivateKey) -> None:
+    metadata = get_folder_metadata(path, private_key)
+    hashes = metadata['hashes']
+    folder_id = int(metadata['folder_id'])
+    timestamp = get_timestamp()
+    hashes = list(filter(lambda x: not x.stratswith(cipher), hashes))
+    metadata['hashes'] = hashes
+    metadata['timestamp'] = str(timestamp)
+    metadata = convert_metadata_dict_to_list(metadata)
+    seperator = '\n'
+    content = seperator.join(metadata)
+    write_meta(path, content, public_key)
+    update_folder_timestamp(db, folder_id, timestamp)
+

@@ -8,6 +8,10 @@ import os
 
 
 def get_timestamp() -> int:
+    """
+
+    :rtype: object
+    """
     ct = datetime.datetime.now()  # current time
     ts = ct.timestamp()  # timestamp of current time
     return round(ts)

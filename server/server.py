@@ -87,6 +87,7 @@ def login(client: socket.socket, address: tuple, db: sqlite3.Connection, cmd_spl
 
 def threaded_client(client: socket.socket, address):  # Authentication
     db = sqlite3.connect('../server.db')
+    db.execute("PRAGMA foreign_keys = ON")
     valid_public_key, user_public_key = check_public_key(client)
     if not valid_public_key:
         return
