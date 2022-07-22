@@ -68,13 +68,9 @@ def check_meta(path, timestamp, private_key):
     return True
 
 
-def remove_file_from_metadata(db: sqlite3.Connection, path: str, cipher: str,
-                              public_key: rsa.PublicKey, private_key: rsa.PrivateKey) -> None:
-    metadata = get_folder_metadata(path, private_key)
-    hashes = metadata['hashes']
-    folder_id = int(metadata['folder_id'])
-    timestamp = get_timestamp()
-    hashes = list(filter(lambda x: not x.stratswith(cipher), hashes))
+def submit_metadata_changes(db: sqlite3.Connection, path: str, metadata: dict, folder_id: int, timestamp: int,
+                            number_of_files: int, hashes: list, public_key: rsa.PublicKey):
+    metadata['number_of_files'] = str(number_of_files)
     metadata['hashes'] = hashes
     metadata['timestamp'] = str(timestamp)
     metadata = convert_metadata_dict_to_list(metadata)
@@ -83,3 +79,32 @@ def remove_file_from_metadata(db: sqlite3.Connection, path: str, cipher: str,
     write_meta(path, content, public_key)
     update_folder_timestamp(db, folder_id, timestamp)
 
+
+def remove_file_from_metadata(db: sqlite3.Connection, path: str, cipher: str,
+                              public_key: rsa.PublicKey, private_key: rsa.PrivateKey) -> None:
+    metadata = get_folder_metadata(path, private_key)
+    hashes = metadata['hashes']
+    folder_id = int(metadata['folder_id'])
+    timestamp = get_timestamp()
+    hashes = list(filter(lambda x: not x.startswith(cipher), hashes))
+    number_of_files = int(metadata['number_of_files'])
+    number_of_files -= 1
+    submit_metadata_changes(db, path, metadata, folder_id, timestamp, number_of_files, hashes, public_key)
+
+
+def change_file_hash(db: sqlite3.Connection, path: str, cipher: str, new_hash: str,
+                     public_key: rsa.PublicKey, private_key: rsa.PrivateKey) -> None:
+    metadata = get_folder_metadata(path, private_key)
+    hashes = metadata['hashes']
+    folder_id = int(metadata['folder_id'])
+    number_of_files = int(metadata['number_of_files'])
+    timestamp = get_timestamp()
+    new_hashes = []
+    for h in hashes:
+        h_split = h.split(" ")
+        file_name = h_split[0]
+        if file_name == cipher:
+            new_hashes.append(f"{cipher} {new_hash}")
+        else:
+            new_hashes.append(h)
+    submit_metadata_changes(db, path, metadata, folder_id, timestamp, number_of_files, hashes, public_key)

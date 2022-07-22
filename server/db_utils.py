@@ -21,7 +21,7 @@ def get_user_by_username(db: sqlite3.Connection, username: str) -> dict:
     return user_dict
 
 
-def folder_tuple_to_folder_dict(folder_tuple: tuple) -> dict:
+def convert_folder_tuple_to_folder_dict(folder_tuple: tuple) -> dict:
     folder_dict = {
         'id': folder_tuple[0],
         'name': folder_tuple[1],
@@ -36,7 +36,7 @@ def get_folder_by_id(db: sqlite3.Connection, folder_id: int):
     folder_query = f'={folder_id}' if folder_id is not None else ' IS NULL'
     query = f"SELECT * FROM folders WHERE id{folder_query}"
     folder_tuple = db.execute(query).fetchone()
-    folder_dict = folder_tuple_to_folder_dict(folder_tuple)
+    folder_dict = convert_folder_tuple_to_folder_dict(folder_tuple)
     return folder_dict
 
 
@@ -44,13 +44,11 @@ def get_folder_by_name_and_parent(db: sqlite3.Connection, name: str, parent_id: 
     parent_query = f'parent_id={parent_id}' if parent_id is not None else 'parent_id IS NULL'
     query = f'SELECT * FROM folders WHERE name="{name}" and {parent_query}'
     folder_tuple = db.execute(query).fetchone()
-    folder_dict = folder_tuple_to_folder_dict(folder_tuple)
+    folder_dict = convert_folder_tuple_to_folder_dict(folder_tuple)
     return folder_dict
 
 
-def get_file_by_name_and_folder_id(db: sqlite3.Connection, name: str, folder_id: int) -> dict:
-    query = f"SELECT * FROM files WHERE name='{name}' and folder_id={folder_id}"
-    file_tuple = db.execute(query).fetchone()
+def convert_file_tuple_to_file_dict(file_tuple):
     file_dict = {
         'id': file_tuple[0],
         'name': file_tuple[1],
@@ -58,6 +56,20 @@ def get_file_by_name_and_folder_id(db: sqlite3.Connection, name: str, folder_id:
         'read_token': file_tuple[3],
         'write_token': file_tuple[4],
     } if file_tuple is not None else None
+    return file_dict
+
+
+def get_file_by_name_and_folder_id(db: sqlite3.Connection, name: str, folder_id: int) -> dict:
+    query = f"SELECT * FROM files WHERE name='{name}' and folder_id={folder_id}"
+    file_tuple = db.execute(query).fetchone()
+    file_dict = convert_file_tuple_to_file_dict(file_tuple)
+    return file_dict
+
+
+def get_file_by_id(db: sqlite3.Connection, file_id: int) -> dict:
+    query = f'SELECT * FROM files WHERE id="{file_id}"'
+    file_tuple = db.execute(query).fetchone()
+    file_dict = convert_file_tuple_to_file_dict(file_tuple)
     return file_dict
 
 
@@ -119,6 +131,21 @@ def update_folder_timestamp(db: sqlite3.Connection, folder_id: int, timestamp: i
     query = f"""UPDATE folders
         set timestamp={timestamp}
         WHERE id={folder_id}"""
+    insert_update_delete_query(db, query)
+
+
+def update_file_parent_folder(db: sqlite3.Connection, file_name: str,
+                              old_parent_id: int, new_parent_id: int):
+    query = f"""UPDATE files
+    set folder_id={new_parent_id}
+    WHERE name="{file_name}" and folder_id={old_parent_id}"""
+    insert_update_delete_query(db, query)
+
+
+def update_folder_parent_id(db: sqlite3.Connection, folder_id: int, new_parent_id: int) -> None:
+    query = f"""UPDATE folders
+            set parent_id={new_parent_id}
+            WHERE id={folder_id}"""
     insert_update_delete_query(db, query)
 
 

@@ -3,7 +3,9 @@ import socket
 import sqlite3
 import rsa
 import os
-from server.utils import encrypt_and_sign, check_sign_and_timestamp
+from utils import encrypt_and_sign, check_sign_and_timestamp, send_message, decrypt_cipher, encrypt_message
+from db_utils import *
+import click
 
 
 if __name__ == '__main__':
@@ -38,39 +40,39 @@ if __name__ == '__main__':
         if message_type == 'M':
             m = message_split[1]
             print(m)
-        elif message_type == 'D':  # D||get||file/dir||id      D||set||file/dir||id||ticket
-            get_or_set = message_split[1]
-            m = message_split[2]
-            file_id = message_split[3]
-            if get_or_set == 'get':
-                if m == 'file':
-                    file_id = message_split[3]
-                    query = f"""SELECT * FROM file_keys WHERE id={file_id}"""
-                    response = db.execute(query).fetchone()
-                    if response is None:
-                        ticket = 'none'
-                    else:
-                        ticket = response[4]
-                message = f"{ticket}"
-                cipher = encrypt_and_sign(message, private_key, server_public_key)
-                client.send(cipher)
-            elif get_or_set == 'set':
-                ticket = message_split[4]
-                if m == 'file':
-                    file_id = message_split[3]
-                    query = f"SELECT * FROM file_keys WHERE id={file_id}"
-                    response = db.execute(query).fetchone()
-                    if response is None:
-                        query = f"""INSERT INTO file_keys
-                        VALUES ({file_id}, "{ticket}")"""
-                        db.execute(query)
-                        db.commit()
-                    else:
-                        query = f"""UPDATE file_keys
-                        SET ticket={ticket}
-                        WHERE id={file_id}"""
-                        db.execute(query)
-                        db.commit()
+        elif message_type == 'D':  # D||get||id      D||set||id||ticket     D||edit||content
+            print(message_split)
+            demand_type = message_split[1]
+            if demand_type == 'get':
+                file_id = int(message_split[2])
+                key = select_from_file_keys(db, file_id)
+                if key is None:
+                    message = f"None"
+                else:
+                    file_id = key['file_id']
+                    file_ticket = key['ticket']
+                    message = f"{file_ticket}"
+                send_message(client, message, server_public_key, private_key)
+            elif demand_type == 'set':
+                file_id = int(message_split[2])
+                token = message_split[3]
+                file_id = int(message_split[2])
+                key = select_from_file_keys(db, file_id)
+                if key is None:
+                    insert_into_file_keys(db, file_id, token)
+                else:
+                    update_token(db, file_id, token)
+            elif demand_type == 'edit':
+                cipher = eval(message_split[2])
+                plaintext = decrypt_cipher(cipher, private_key)
+                new_plaintext = click.edit(plaintext)
+                new_cipher = encrypt_message(new_plaintext, public_key)
+                message = f"{new_cipher}"
+                send_message(client, message, server_public_key, private_key)
+            elif demand_type == 'cat':
+                cipher = eval(message_split[2])
+                plaintext = decrypt_cipher(cipher, private_key)
+                print(plaintext)
         elif message_type == 'I':
             m = message_split[1]
             print(m)
@@ -100,9 +102,16 @@ if __name__ == '__main__':
             else:
                 cmd_split = cmd.split(' ')
                 cmd_type = cmd_split[0]
-                if cmd_type == 'mkdir' or cmd_type == 'touch' or cmd_type == 'cd':
+                if cmd_type == 'mkdir' or cmd_type == 'cd' or cmd_type == 'edit' or cmd_type == 'cat':
                     path = cmd_split[1]
                     message = f"{cmd_type}||{path}"
+                    cipher = encrypt_and_sign(message, private_key, server_public_key)
+                    client.send(cipher)
+                elif cmd_type == 'touch':
+                    path = cmd_split[1]
+                    content = encrypt_message(' ', public_key)
+                    print('xxx', content)
+                    message = f"{cmd_type}||{path}||{content}"
                     cipher = encrypt_and_sign(message, private_key, server_public_key)
                     client.send(cipher)
                 elif cmd_type == 'ls':
@@ -120,6 +129,17 @@ if __name__ == '__main__':
                     else:
                         path = cmd_split[1]
                         message = f"{cmd_type}||file||{path}"
+                    cipher = encrypt_and_sign(message, private_key, server_public_key)
+                    client.send(cipher)
+                elif cmd_type == 'mv':
+                    if cmd_split[1] == '-r':
+                        src_path = cmd_split[2]
+                        dest_path = cmd_split[3]
+                        message = f"{cmd_type}||folder||{src_path}||{dest_path}"
+                    else:
+                        src_path = cmd_split[1]
+                        dest_path = cmd_split[2]
+                        message = f"{cmd_type}||file||{src_path}||{dest_path}"
                     cipher = encrypt_and_sign(message, private_key, server_public_key)
                     client.send(cipher)
                 # else send message to server

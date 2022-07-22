@@ -6,7 +6,7 @@ db = sqlite3.connect('client.db')
 
 db.execute("""CREATE TABLE file_keys
                 (id int, public_key varchar(512), private_key varchar(512), 
-                ticket char(64))
+                token char(64))
                 """)
 
 db.execute("""CREATE TABLE dir_keys
