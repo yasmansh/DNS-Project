@@ -52,6 +52,8 @@ def get_encrypted_file_name(absolute_path: str, name: str, private_key: rsa.Priv
                             folder_id: int, db: sqlite3.Connection) -> Optional[str]:
     files_and_folders = os.listdir(absolute_path)
     file = get_file_by_name_and_folder_id(db, name, folder_id)
+    if file is None:
+        return None
     file_id = file['id']
     for cipher in files_and_folders:
         if not cipher.startswith('.') and os.path.isfile(os.path.join(absolute_path, cipher)):
@@ -63,7 +65,6 @@ def get_encrypted_file_name(absolute_path: str, name: str, private_key: rsa.Priv
 
 def get_encrypted_absolute_path(absolute_folders: list, private_key: rsa.PrivateKey, db: sqlite3.Connection) -> str:
     res = ''
-    print(absolute_folders)
     for folder in absolute_folders[1:]:
         folder_name = folder['name']
         parent_id = folder['parent_id']
@@ -92,6 +93,32 @@ def write_content_to_file(path, content):
     f = open(path, 'wb')
     f.write(content)
     f.close()
+
+
+def gen_new_tokens(db: sqlite3.Connection, client: socket.socket, username: str, file_id: int, private_key):
+    user = get_user_by_username(db, username)
+    user_public_key = eval(user['public_key'])
+    read_token = gen_nonce()
+    write_token = gen_nonce()
+    update_file_tokens(db, file_id, read_token, write_token)
+    access_files = get_all_access_files(db, file_id)
+    for access_file in access_files:
+        token = write_token if access_file['rw'] == 1 else read_token
+        message = f"D||set||{access_file['username']}||{file_id}||{token}"
+        send_message(client, message, user_public_key, private_key)
+        sleep(0.1)
+
+
+def share_token(db: sqlite3.Connection, client: socket.socket, username: str, dest_username: str, file_id: int,
+                access_level, private_key):
+    user = get_user_by_username(db, username)
+    user_public_key = eval(user['public_key'])
+    file = get_file_by_id(db, file_id)
+    read_token = file['read_token']
+    write_token = file['write_token']
+    token = write_token if access_level == 'rw' else read_token
+    message = f"D||set||{dest_username}||{file_id}||{token}"
+    send_message(client, message, user_public_key, private_key)
 
 
 def goto_path(db: sqlite3.Connection, client: socket.socket, path: str, current_folder_id: int, username: str,
@@ -153,10 +180,10 @@ def make_file(client: socket.socket, db: sqlite3.Connection, path: str, file_nam
                              rw="true")
     user = get_user_by_username(db, username)
     user_public_key = eval(user['public_key'])
-    message = f"D||set||{file_id}||{write_token}"
+    message = f"D||set||{username}||{file_id}||{write_token}"
     send_message(client, message, user_public_key, private_key)
-    sleep(0.5)
-    message = f"M||File {file_name} with id {file_id} Created Successfully"
+    sleep(0.1)
+    message = f"M||File {file_name} with id {file_id} Created Successfully\n"
     send_message(client, message, user_public_key, private_key)
     return True
 
@@ -211,26 +238,28 @@ def mkdir(db: sqlite3.Connection, client: socket.socket, user: dict, path: str, 
             ok, new_folder_id = make_empty_dir(db, new_folder_name, folder_id, public_key, private_key)
             if ok:
                 current_folder_id = new_folder_id
-                message = f"M||Folder {new_folder_name} with id {new_folder_id} Created Successfully"
+                message = f"M||Folder {new_folder_name} with id {new_folder_id} Created Successfully\n"
                 send_message(client, message, user_public_key, private_key)
                 exists = True
     if not exists:
-        message = "M||Folder Already Exists"
+        message = "M||Folder Already Exists\n"
         send_message(client, message, user_public_key, private_key)
     absolute_path_folders = get_absolute_path_folders(db, current_folder_id)
     absolute_path_encrypted = get_encrypted_absolute_path(absolute_path_folders, private_key, db)
     return True, absolute_path_encrypted
 
 
-def get_list_files_by_folder_id(db: sqlite3.Connection, current_folder_id: int,
+def get_list_files_by_folder_id(db: sqlite3.Connection, client: socket.socket, current_folder_id: int, username: str,
                                 private_key: rsa.PrivateKey):
+    user = get_user_by_username(db, username)
+    user_public_key = eval(user['public_key'])
     absolute_path_folders = get_absolute_path_folders(db, current_folder_id)
     absolute_path_encrypted = get_encrypted_absolute_path(absolute_path_folders, private_key, db)
     list_files_cipher = os.listdir(absolute_path_encrypted)
     list_files_cipher = filter(lambda x: not x.startswith('.'), list_files_cipher)
     list_files = []
     for cipher in list_files_cipher:
-        f_id = rsa.decrypt(bytes.fromhex(cipher), private_key).decode()
+        f_id = int(rsa.decrypt(bytes.fromhex(cipher), private_key).decode())
         path = os.path.join(absolute_path_encrypted, cipher)
         if os.path.isdir(path):
             folder = get_folder_by_id(db, f_id)
@@ -238,7 +267,9 @@ def get_list_files_by_folder_id(db: sqlite3.Connection, current_folder_id: int,
                 list_files.append(folder['name'])
         elif os.path.isfile(path):
             file = get_file_by_id(db, f_id)
-            if file['folder_id'] == current_folder_id:
+            has_access, access_level = check_file_access(db, client, f_id, username, user_public_key,
+                                                         private_key)
+            if file['folder_id'] == current_folder_id and has_access:
                 list_files.append(file['name'])
     return list_files
 
@@ -247,10 +278,10 @@ def ls(db: sqlite3.Connection, client: socket.socket, path: str, current_folder_
        username: str, private_key: rsa.PrivateKey):
     res, current_folder_id = goto_path(db, client, path, current_folder_id, username, private_key)
     if res:
-        list_files = get_list_files_by_folder_id(db, current_folder_id, private_key)
+        list_files = get_list_files_by_folder_id(db, client, current_folder_id, username, private_key)
         seperator = '\n'
         list_files_string = seperator.join(list_files)
-        message = f"M||{list_files_string}"
+        message = f"M||{list_files_string}\n"
         user = get_user_by_username(db, username)
         user_public_key = eval(user['public_key'])
         send_message(client, message, user_public_key, private_key)
@@ -263,22 +294,32 @@ def rm(db: sqlite3.Connection, client: socket.socket, path: str, username: str,
     if res:
         absolute_path_folders = get_absolute_path_folders(db, current_folder_id)
         absolute_path_encrypted = get_encrypted_absolute_path(absolute_path_folders, private_key, db)
-        list_files = filter(lambda x: not x.startswith('.'), os.listdir(absolute_path_encrypted))
         if file_or_folder == 'file':
             file_name_encrypted = get_encrypted_file_name(absolute_path_encrypted, name, private_key, current_folder_id,
                                                           db)
-            file_path = os.path.join(absolute_path_encrypted, file_name_encrypted)
-            remove_file_from_metadata(db, path, file_name_encrypted, public_key, private_key)
-            delete_file_from_database(db, name, current_folder_id)
-            os.remove(file_path)
+            if file_name_encrypted is None:
+                user = get_user_by_username(db, username)
+                user_public_key = eval(user['public_key'])
+                message = "M||File doesn't exists\n"
+                send_message(client, message, user_public_key, private_key)
+            else:
+                file_path = os.path.join(absolute_path_encrypted, file_name_encrypted)
+                remove_file_from_metadata(db, path, file_name_encrypted, public_key, private_key)
+                delete_file_from_database(db, name, current_folder_id)
+                os.remove(file_path)
         elif file_or_folder == 'folder':
             folder_name_encrypted = get_encrypted_folder_name(absolute_path_encrypted, name, private_key,
-                                                             current_folder_id, db)
-            folder_path = os.path.join(absolute_path_encrypted, folder_name_encrypted)
-            folder_name = rsa.decrypt(bytes.fromhex(folder_name_encrypted), private_key).decode()
-            folder_id = int(rsa.decrypt(bytes.fromhex(folder_name_encrypted), private_key))
-            shutil.rmtree(folder_path)
-            delete_folder_from_database(db, folder_id)
+                                                              current_folder_id, db)
+            if folder_name_encrypted is None:
+                user = get_user_by_username(db, username)
+                user_public_key = eval(user['public_key'])
+                message = "M||Folder doesn't exists\n"
+                send_message(client, message, user_public_key, private_key)
+            else:
+                folder_path = os.path.join(absolute_path_encrypted, folder_name_encrypted)
+                folder_id = int(rsa.decrypt(bytes.fromhex(folder_name_encrypted), private_key))
+                shutil.rmtree(folder_path)
+                delete_folder_from_database(db, folder_id)
 
 
 def mv(db: sqlite3.Connection, client: socket.socket, username: str,
@@ -288,12 +329,12 @@ def mv(db: sqlite3.Connection, client: socket.socket, username: str,
     user_public_key = eval(user['public_key'])
     res, src_folder_id = goto_path(db, client, src_path, current_folder_id, username, private_key)
     if not res:
-        message = "M||CANNOT GO TO SOURCE"
+        message = "M||CANNOT GO TO SOURCE\n"
         send_message(client, message, user_public_key, private_key)
     else:
         res, dest_folder_id = goto_path(db, client, dest_path, current_folder_id, username, private_key)
         if not res:
-            message = "M||CANNOT GO TO DES"
+            message = "M||CANNOT GO TO DES\n"
             send_message(client, message, user_public_key, private_key)
         else:
             absolute_src_path_folders = get_absolute_path_folders(db, src_folder_id)
@@ -324,9 +365,9 @@ def mv(db: sqlite3.Connection, client: socket.socket, username: str,
                         update_folder_parent_id(db, folder_id, dest_folder_id)
 
 
-def check_file_access(db: sqlite3.Connection, client: socket.socket, file_id: int,
+def check_file_access(db: sqlite3.Connection, client: socket.socket, file_id: int, username: str,
                       user_public_key: rsa.PublicKey, private_key: rsa.PrivateKey):
-    message = f"D||get||{file_id}"
+    message = f"D||get||{username}||{file_id}"
     send_message(client, message, user_public_key, private_key)
     ok, token = get_message(client, user_public_key, private_key)
     if not ok:
@@ -348,32 +389,36 @@ def edit(db: sqlite3.Connection, client: socket.socket, username: str, path: str
     user_public_key = eval(user['public_key'])
     res, current_folder_id = goto_path(db, client, path, current_folder_id, username, private_key)
     if not res:
-        message = "M||CANNOT GO TO PATH"
+        message = "M||CANNOT GO TO PATH\n"
         send_message(client, message, user_public_key, private_key)
     else:
         absolute_path_folders = get_absolute_path_folders(db, current_folder_id)
         absolute_path_encrypted = get_encrypted_absolute_path(absolute_path_folders, private_key, db)
         file_cipher = get_encrypted_file_name(absolute_path_encrypted, name, private_key, current_folder_id, db)
-        file_id = int(rsa.decrypt(bytes.fromhex(file_cipher), private_key).decode())
-        file_path = os.path.join(absolute_path_encrypted, file_cipher)
-        has_access, access_level = check_file_access(db, client, file_id, user_public_key, private_key)
-        if has_access and access_level == 'rw':
-            content = get_file_content(file_path)
-            message = f"D||edit||{content}"
+        if file_cipher is None:
+            message = "M||File doesn't exists\n"
             send_message(client, message, user_public_key, private_key)
-            ok, new_content = get_message(client, user_public_key, private_key)
-            if ok:
-                write_content_to_file(file_path, eval(new_content[0]))
-                new_hash = hash_file(file_path)
-                change_file_hash(db, path, file_cipher, new_hash, public_key, private_key)
-                message = f"M||File Edited Successfully"
-                send_message(client, message, user_public_key, private_key)
-            else:
-                message = f"M||Write content type"
-                send_message(client, message, user_public_key, private_key)
         else:
-            message = f"M||You don't have access"
-            send_message(client, message, user_public_key, private_key)
+            file_id = int(rsa.decrypt(bytes.fromhex(file_cipher), private_key).decode())
+            file_path = os.path.join(absolute_path_encrypted, file_cipher)
+            has_access, access_level = check_file_access(db, client, file_id, username, user_public_key, private_key)
+            if has_access and access_level == 'rw':
+                content = get_file_content(file_path)
+                message = f"D||edit||{content}"
+                send_message(client, message, user_public_key, private_key)
+                ok, new_content = get_message(client, user_public_key, private_key)
+                if ok:
+                    write_content_to_file(file_path, eval(new_content[0]))
+                    new_hash = hash_file(file_path)
+                    change_file_hash(db, path, file_cipher, new_hash, public_key, private_key)
+                    message = f"M||File Edited Successfully\n"
+                    send_message(client, message, user_public_key, private_key)
+                else:
+                    message = f"M||Write content type\n"
+                    send_message(client, message, user_public_key, private_key)
+            else:
+                message = f"M||You don't have access\n"
+                send_message(client, message, user_public_key, private_key)
 
 
 def cat(db: sqlite3.Connection, client: socket.socket, username: str, path: str,
@@ -382,19 +427,98 @@ def cat(db: sqlite3.Connection, client: socket.socket, username: str, path: str,
     user_public_key = eval(user['public_key'])
     res, current_folder_id = goto_path(db, client, path, current_folder_id, username, private_key)
     if not res:
-        message = "M||CANNOT GO TO PATH"
+        message = "M||CANNOT GO TO PATH\n"
         send_message(client, message, user_public_key, private_key)
     else:
         absolute_path_folders = get_absolute_path_folders(db, current_folder_id)
         absolute_path_encrypted = get_encrypted_absolute_path(absolute_path_folders, private_key, db)
         file_cipher = get_encrypted_file_name(absolute_path_encrypted, name, private_key, current_folder_id, db)
-        file_id = int(rsa.decrypt(bytes.fromhex(file_cipher), private_key).decode())
-        file_path = os.path.join(absolute_path_encrypted, file_cipher)
-        has_access, access_level = check_file_access(db, client, file_id, user_public_key, private_key)
-        if has_access:
-            content = get_file_content(file_path)
-            message = f"D||cat||{content}"
+        if file_cipher is None:
+            message = "M||File doesn't exists\n"
             send_message(client, message, user_public_key, private_key)
+        else:
+            file_id = int(rsa.decrypt(bytes.fromhex(file_cipher), private_key).decode())
+            file_path = os.path.join(absolute_path_encrypted, file_cipher)
+            has_access, access_level = check_file_access(db, client, file_id, username, user_public_key, private_key)
+            if has_access:
+                content = get_file_content(file_path)
+                message = f"D||cat||{content}"
+                send_message(client, message, user_public_key, private_key)
+            else:
+                message = f"M||You don't have access\n"
+                send_message(client, message, user_public_key, private_key)
+
+
+def share(db: sqlite3.Connection, client: socket.socket, username: str, dest_username: str, path: str,
+          name: str, current_folder_id: int, access_level: str,
+          user_public_key: rsa.PublicKey, public_key: rsa.PublicKey, private_key: rsa.PrivateKey):
+    res, current_folder_id = goto_path(db, client, path, current_folder_id, dest_username, private_key)
+    if not res:
+        message = "M||CANNOT GO TO PATH\n"
+        send_message(client, message, user_public_key, private_key)
+    else:
+        dest_user = get_user_by_username(db, dest_username)
+        if dest_user is None:
+            message = "M||User doesn't exist\n"
+            send_message(client, message, user_public_key, private_key)
+        else:
+            absolute_path_folders = get_absolute_path_folders(db, current_folder_id)
+            absolute_path_encrypted = get_encrypted_absolute_path(absolute_path_folders, private_key, db)
+            file_cipher = get_encrypted_file_name(absolute_path_encrypted, name, private_key, current_folder_id, db)
+            if file_cipher is None:
+                message = "M||File doesn't exists\n"
+                send_message(client, message, user_public_key, private_key)
+            else:
+                file_id = int(rsa.decrypt(bytes.fromhex(file_cipher), private_key).decode())
+                if is_user_owner(db, username, file_id):
+                    rw = 'true' if access_level == 'rw' else 'false'
+                    file_access = get_file_access(db, file_id, dest_username)
+                    if file_access is None:
+                        insert_into_files_access(db, file_id, dest_username, 'false', rw)
+                    else:
+                        update_files_access(db, file_id, dest_username, rw)
+                    share_token(db, client, username, dest_username, file_id, access_level, private_key)
+                else:
+                    message = "M||You are not owner\n"
+                    send_message(client, message, user_public_key, private_key)
+
+
+def revoke(db: sqlite3.Connection, client: socket.socket, username: str, dest_username: str, path: str,
+           name: str, current_folder_id: int,
+           user_public_key: rsa.PublicKey, public_key: rsa.PublicKey, private_key: rsa.PrivateKey):
+    res, current_folder_id = goto_path(db, client, path, current_folder_id, dest_username, private_key)
+    if not res:
+        message = "M||CANNOT GO TO PATH\n"
+        send_message(client, message, user_public_key, private_key)
+    else:
+        absolute_path_folders = get_absolute_path_folders(db, current_folder_id)
+        absolute_path_encrypted = get_encrypted_absolute_path(absolute_path_folders, private_key, db)
+        file_cipher = get_encrypted_file_name(absolute_path_encrypted, name, private_key, current_folder_id, db)
+        if file_cipher is None:
+            message = "M||File doesn't exists\n"
+            send_message(client, message, user_public_key, private_key)
+        else:
+            file_id = int(rsa.decrypt(bytes.fromhex(file_cipher), private_key).decode())
+            if dest_username is not None:
+                dest_user = get_user_by_username(db, dest_username)
+                if dest_user is None:
+                    message = "M||User doesn't exist\n"
+                    send_message(client, message, user_public_key, private_key)
+                    gen_new_tokens(db, client, username, file_id, private_key)
+                else:
+                    if is_user_owner(db, username, file_id):
+                        delete_files_access(db, file_id, username, dest_username)
+                        gen_new_tokens(db, client, username, file_id, private_key)
+                    else:
+                        message = "M||You are not owner\n"
+                        send_message(client, message, user_public_key, private_key)
+            else:
+                if is_user_owner(db, username, file_id):
+                    delete_files_access(db, file_id, username, dest_username)
+                    gen_new_tokens(db, client, username, file_id, private_key)
+                else:
+                    message = "M||You are not owner\n"
+                    send_message(client, message, user_public_key, private_key)
 
 
 def secure_file_system(client: socket.socket, username: str, db: sqlite3.Connection, user_public_key: rsa.PublicKey,
@@ -471,4 +595,31 @@ def secure_file_system(client: socket.socket, username: str, db: sqlite3.Connect
             else:
                 (path, name) = os.path.split(path)
             cat(db, client, username, path, name, current_folder_id, public_key, private_key)
+        elif cmd_type == 'share':
+            path = cmd_split[1]
+            if len(path.split(os.path.sep)) == 1:
+                name = path
+                path = '.'
+            else:
+                (path, name) = os.path.split(path)
+            dest_username = cmd_split[2]
+            access_level = cmd_split[3]
+            share(db, client, username,
+                  dest_username, path, name, current_folder_id, access_level, user_public_key, public_key,
+                  private_key)
+        elif cmd_type == 'revoke':
+            path = cmd_split[1]
+            if len(path.split(os.path.sep)) == 1:
+                name = path
+                path = '.'
+            else:
+                (path, name) = os.path.split(path)
+            dest_username = cmd_split[2]
+            if dest_username == '-':
+                dest_username = None
+            revoke(db, client, username, dest_username, path, name, current_folder_id, user_public_key, public_key,
+                   private_key)
+        else:
+            message = f"M||Unknown Command\n"
+            send_message(client, message, user_public_key, private_key)
     client.close(0)

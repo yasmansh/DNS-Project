@@ -15,16 +15,16 @@ if __name__ == '__main__':
 
     client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     client.connect((host, port))
-    db = sqlite3.connect('client.db')
 
     with open(os.path.join('..', 'server', 'PU_server.pem'), "rb") as f:
         data = f.read()
         server_public_key = rsa.PublicKey.load_pkcs1(data)
 
-    with open('PU_client.pem', "rb") as f:
+
+    with open(f'PU_client.pem', "rb") as f:
         data = f.read()
         public_key = rsa.PublicKey.load_pkcs1(data)
-    with open('PR_client.pem', "rb") as f:
+    with open(f'PR_client.pem', "rb") as f:
         data = f.read()
         private_key = rsa.PrivateKey.load_pkcs1(data)
 
@@ -39,12 +39,16 @@ if __name__ == '__main__':
         message_type = message_split[0]
         if message_type == 'M':
             m = message_split[1]
-            print(m)
-        elif message_type == 'D':  # D||get||id      D||set||id||ticket     D||edit||content
-            print(message_split)
+            print(m, end=' ')
+            if m == 'Registration successful':
+                create_db(username)
+        elif message_type == 'D':  # D||get||username||id      D||set||username||id||ticket     D||edit||content
             demand_type = message_split[1]
             if demand_type == 'get':
-                file_id = int(message_split[2])
+                db_username = message_split[2]
+                db = sqlite3.connect(f"{db_username}.db")
+                db.execute("PRAGMA foreign_keys = ON")
+                file_id = int(message_split[3])
                 key = select_from_file_keys(db, file_id)
                 if key is None:
                     message = f"None"
@@ -54,9 +58,11 @@ if __name__ == '__main__':
                     message = f"{file_ticket}"
                 send_message(client, message, server_public_key, private_key)
             elif demand_type == 'set':
-                file_id = int(message_split[2])
-                token = message_split[3]
-                file_id = int(message_split[2])
+                db_username = message_split[2]
+                db = sqlite3.connect(f"{db_username}.db")
+                db.execute("PRAGMA foreign_keys = ON")
+                file_id = int(message_split[3])
+                token = message_split[4]
                 key = select_from_file_keys(db, file_id)
                 if key is None:
                     insert_into_file_keys(db, file_id, token)
@@ -75,8 +81,8 @@ if __name__ == '__main__':
                 print(plaintext)
         elif message_type == 'I':
             m = message_split[1]
-            print(m)
-            cmd = input('Enter Input: ')
+            print(m, end=' ')
+            cmd = input()
             cmd_split = cmd.split('||')
             cmd_type = cmd_split[0]
             if cmd_type == '1':
@@ -110,7 +116,6 @@ if __name__ == '__main__':
                 elif cmd_type == 'touch':
                     path = cmd_split[1]
                     content = encrypt_message(' ', public_key)
-                    print('xxx', content)
                     message = f"{cmd_type}||{path}||{content}"
                     cipher = encrypt_and_sign(message, private_key, server_public_key)
                     client.send(cipher)
@@ -140,6 +145,26 @@ if __name__ == '__main__':
                         src_path = cmd_split[1]
                         dest_path = cmd_split[2]
                         message = f"{cmd_type}||file||{src_path}||{dest_path}"
+                    cipher = encrypt_and_sign(message, private_key, server_public_key)
+                    client.send(cipher)
+                elif cmd_type == 'share':
+                    path = cmd_split[1]
+                    dest_username = cmd_split[2]
+                    access_level = cmd_split[3][1:]
+                    message = f"{cmd_type}||{path}||{dest_username}||{access_level}"
+                    cipher = encrypt_and_sign(message, private_key, server_public_key)
+                    client.send(cipher)
+                elif cmd_type == 'revoke':
+                    path = cmd_split[1]
+                    if len(cmd_split) == 2:
+                        dest_username = '-'
+                    else:
+                        dest_username = cmd_split[2]
+                    message = f"{cmd_type}||{path}||{dest_username}"
+                    cipher = encrypt_and_sign(message, private_key, server_public_key)
+                    client.send(cipher)
+                else:
+                    message = f"{cmd_type}"
                     cipher = encrypt_and_sign(message, private_key, server_public_key)
                     client.send(cipher)
                 # else send message to server

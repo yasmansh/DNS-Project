@@ -1,3 +1,4 @@
+import socket
 import sqlite3
 
 import rsa
@@ -48,6 +49,20 @@ def get_folder_by_name_and_parent(db: sqlite3.Connection, name: str, parent_id: 
     return folder_dict
 
 
+def get_all_access_files(db: sqlite3.Connection, file_id: int):
+    query = f'SELECT * FROM files_access WHERE file_id={file_id}'
+    res = []
+    for file_access_folder in db.execute(query).fetchall():
+        file_access_dict = {
+            'file_id': file_access_folder[0],
+            'username': file_access_folder[1],
+            'owner': file_access_folder[2],
+            'rw': file_access_folder[3],
+        } if file_access_folder is not None else None
+        res.append(file_access_dict)
+    return res
+
+
 def convert_file_tuple_to_file_dict(file_tuple):
     file_dict = {
         'id': file_tuple[0],
@@ -81,7 +96,7 @@ def get_file_access(db: sqlite3.Connection, file_id: int, username: str) -> dict
         'username': file_access_folder[1],
         'owner': file_access_folder[2],
         'rw': file_access_folder[3],
-    }
+    } if file_access_folder is not None else None
     return file_access_dict
 
 
@@ -142,6 +157,13 @@ def update_file_parent_folder(db: sqlite3.Connection, file_name: str,
     insert_update_delete_query(db, query)
 
 
+def update_file_tokens(db: sqlite3.Connection, file_id: int, read_token: str, write_token: str):
+    query = f"""UPDATE files
+    SET read_token="{read_token}", write_token="{write_token}"
+    WHERE id={file_id}"""
+    insert_update_delete_query(db, query)
+
+
 def update_folder_parent_id(db: sqlite3.Connection, folder_id: int, new_parent_id: int) -> None:
     query = f"""UPDATE folders
             set parent_id={new_parent_id}
@@ -159,6 +181,29 @@ def delete_folder_from_database(db: sqlite3.Connection, folder_id: int):
     insert_update_delete_query(db, query)
 
 
+def delete_files_access(db: sqlite3.Connection, file_id: int, username: str, dest_username: str):
+    if dest_username is None:
+        query = f'DELETE FROM files_access WHERE username!="{username}" and file_id={file_id}'
+    else:
+        query = f'DELETE FROM files_access WHERE username="{dest_username}" and file_id={file_id}'
+    print(query)
+    insert_update_delete_query(db, query)
+
+
+def update_files_access(db: sqlite3.Connection, file_id: int, username: str, rw):
+    query = f'UPDATE files_access SET rw="{rw}" WHERE file_id={file_id} and username="{username}"'
+    insert_update_delete_query(db, query)
+
+
 def insert_update_delete_query(db, query):
     db.execute(query)
     db.commit()
+
+
+def is_user_owner(db: sqlite3.Connection, username: str, file_id: int):
+    file_access = get_file_access(db, file_id, username)
+    if file_id is None:
+        return False
+    owner = file_access['owner']
+    return True if owner == 1 else False
+

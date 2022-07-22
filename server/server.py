@@ -18,7 +18,7 @@ def check_public_key(client: socket.socket):
     signature = eval(message_split[2])
     timestamp = message_split[1]
     if not rsa.verify(str(f"{user_public_key}||{timestamp}").encode(), signature, user_public_key):
-        message = f"M||Wrong Public Key!"
+        message = f"M||Wrong Public Key!\n"
         send_message(client, message, user_public_key, private_key)
         client.close()
         return False, -1
@@ -34,7 +34,7 @@ def signup(client: socket.socket, address: tuple, db: sqlite3.Connection, cmd_sp
     user = get_user_by_username(db, username)
     (user_host, user_port) = address
     if user is not None:
-        message = 'M||This username is already existed. Please enter another one!'
+        message = 'M||This username is already existed. Please enter another one!\n'
         send_message(client, message, user_public_key, private_key)
         return
     insert_into_folders(db,
@@ -54,35 +54,39 @@ def signup(client: socket.socket, address: tuple, db: sqlite3.Connection, cmd_sp
                          public_key=user_public_key,
                          host=user_host,
                          port=user_port)
-    message = 'M||Registration successful'
+    message = 'M||Registration successful\n'
     send_message(client, message, user_public_key, private_key)
 
 
-def login(client: socket.socket, address: tuple, db: sqlite3.Connection, cmd_split: list) -> None:
+def login(client: socket.socket, address: tuple, db: sqlite3.Connection, user_public_key, cmd_split: list) -> None:
     username = cmd_split[1]
     password = cmd_split[2]
     (user_host, user_port) = address
     user = get_user_by_username(db, username)
-    user_public_key = eval(user['public_key'])
-    if user is None:
-        message = 'M||Incorrect username'
-        send_message(client, message, user_public_key, private_key)
-        return
-    correct_password = user['password']
-    if password == correct_password:
-        message = 'M||Login successful'
-        update_user(db,
-                    username=username,
-                    public_key=user_public_key,
-                    host=user_host,
-                    port=user_port)
-        send_message(client, message, user_public_key, private_key)
-        print('Connected : ', username)
-        secure_file_system(client, username, db, user_public_key, public_key, private_key)
+    if user is not None:
+        user_public_key = eval(user['public_key'])
+        if user is None:
+            message = 'M||Incorrect username\n'
+            send_message(client, message, user_public_key, private_key)
+            return
+        correct_password = user['password']
+        if password == correct_password:
+            message = 'M||Login successful\n'
+            update_user(db,
+                        username=username,
+                        public_key=user_public_key,
+                        host=user_host,
+                        port=user_port)
+            send_message(client, message, user_public_key, private_key)
+            print('Connected : ', username)
+            secure_file_system(client, username, db, user_public_key, public_key, private_key)
+        else:
+            message = 'M||Incorrect Password\n'
+            send_message(client, message, user_public_key, private_key)
+            return  # Back to menu
     else:
-        message = 'M||Incorrect Password'
+        message = f"M||Incorrect username\n"
         send_message(client, message, user_public_key, private_key)
-        return  # Back to menu
 
 
 def threaded_client(client: socket.socket, address):  # Authentication
@@ -92,7 +96,7 @@ def threaded_client(client: socket.socket, address):  # Authentication
     if not valid_public_key:
         return
     while True:
-        message = f"""I||SignUp: 1, Login: 2, Exit: 3"""
+        message = f"""I||SignUp: 1, Login: 2, Exit: 3\n"""
         send_message(client, message, user_public_key, private_key)
         ok, cmd_split = get_message(client, user_public_key, private_key)
         if not ok:
@@ -101,7 +105,7 @@ def threaded_client(client: socket.socket, address):  # Authentication
         if cmd_type == '1':
             signup(client, address, db, cmd_split, user_public_key)
         elif cmd_type == '2':
-            login(client, address, db, cmd_split)
+            login(client, address, db, user_public_key, cmd_split)
         elif cmd_type == '3':
             print('client disconnected.|')
             break

@@ -4,6 +4,19 @@ import rsa
 from rsa import PublicKey, PrivateKey
 
 
+def create_db(username: str):
+    db = sqlite3.connect(f'{username}.db')
+    db.execute("PRAGMA foreign_keys = ON")
+
+    db.execute("""CREATE TABLE file_keys
+                    (id int, public_key varchar(512), private_key varchar(512), 
+                    token char(64))
+                    """)
+
+    db.execute("""CREATE TABLE dir_keys
+                (id int, ticket char(64))""")
+
+
 def select_from_file_keys(db: sqlite3.Connection, file_id: int):
     query = f"SELECT * FROM file_keys WHERE id={file_id}"
     file_tuple = db.execute(query).fetchone()

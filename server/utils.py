@@ -60,6 +60,7 @@ def check_sign_and_timestamp(client: socket.socket, cipher: str, private_key: rs
                              public_key: rsa.PublicKey) -> object:
     plaintext = decrypt_cipher(cipher, private_key)
     plaintext = plaintext.split('||')
+    print(plaintext)
     message = '||'.join(plaintext[:-2])
     timestamp = eval(plaintext[-2])
     signature = eval(plaintext[-1])
