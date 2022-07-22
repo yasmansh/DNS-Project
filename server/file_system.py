@@ -63,7 +63,6 @@ def get_encrypted_file_name(absolute_path: str, name: str, private_key: rsa.Priv
 
 def get_encrypted_absolute_path(absolute_folders: list, private_key: rsa.PrivateKey, db: sqlite3.Connection) -> str:
     res = ''
-    print(absolute_folders[1:])
     for folder in absolute_folders[1:]:
         folder_name = folder['name']
         parent_id = folder['parent_id']
@@ -258,25 +257,21 @@ def rm(db: sqlite3.Connection, client: socket.socket, path: str, username: str,
         absolute_path_folders = get_absolute_path_folders(db, current_folder_id)
         absolute_path_encrypted = get_encrypted_absolute_path(absolute_path_folders, private_key, db)
         list_files = filter(lambda x: not x.startswith('.'), os.listdir(absolute_path_encrypted))
-        metadata = get_folder_metadata(absolute_path_encrypted, private_key)
-        folder_id = metadata['folder_id']
         if file_or_folder == 'file':
-            for file_name_cipher in list_files:
-                file_path = os.path.join(absolute_path_encrypted, file_name_cipher)
-                file_name = rsa.decrypt(bytes.fromhex(file_name_cipher), private_key).decode()
-                if os.path.isfile(file_path) and file_name == name:
-                    remove_file_from_metadata(db, path, file_name_cipher, public_key, private_key)
-                    delete_file_from_database(db, file_name, folder_id)
-                    os.remove(file_path)
+            file_name_encrypted = get_encrypted_file_name(absolute_path_encrypted, name, private_key, current_folder_id,
+                                                          db)
+            file_path = os.path.join(absolute_path_encrypted, file_name_encrypted)
+            remove_file_from_metadata(db, path, file_name_encrypted, public_key, private_key)
+            delete_file_from_database(db, name, current_folder_id)
+            os.remove(file_path)
         elif file_or_folder == 'folder':
-            for folder_name_cipher in list_files:
-                folder_path = os.path.join(absolute_path_encrypted, folder_name_cipher)
-                folder_name = rsa.decrypt(bytes.fromhex(folder_name_cipher), private_key).decode()
-                if os.path.isdir(folder_path) and folder_name == name:
-                    metadata = get_folder_metadata(folder_path, private_key)
-                    folder_id = metadata['folder_id']
-                    shutil.rmtree(folder_path)
-                    delete_folder_from_database(db, folder_id)
+            folder_name_encrypted = get_encrypted_folder_name(absolute_path_encrypted, name, private_key,
+                                                             current_folder_id, db)
+            folder_path = os.path.join(absolute_path_encrypted, folder_name_encrypted)
+            folder_name = rsa.decrypt(bytes.fromhex(folder_name_encrypted), private_key).decode()
+            folder_id = int(rsa.decrypt(bytes.fromhex(folder_name_encrypted), private_key))
+            shutil.rmtree(folder_path)
+            delete_folder_from_database(db, folder_id)
 
 
 def mv(db: sqlite3.Connection, client: socket.socket, username: str,
@@ -375,7 +370,7 @@ def edit(db: sqlite3.Connection, client: socket.socket, username: str, path: str
 
 
 def cat(db: sqlite3.Connection, client: socket.socket, username: str, path: str,
-         name: str, current_folder_id: int, public_key: rsa.PublicKey, private_key: rsa.PrivateKey) -> None:
+        name: str, current_folder_id: int, public_key: rsa.PublicKey, private_key: rsa.PrivateKey) -> None:
     user = get_user_by_username(db, username)
     user_public_key = eval(user['public_key'])
     res, current_folder_id = goto_path(db, client, path, current_folder_id, username, private_key)
@@ -414,7 +409,6 @@ def secure_file_system(client: socket.socket, username: str, db: sqlite3.Connect
         elif cmd_type == 'touch':  # touch||path||password||timestamp
             path = cmd_split[1]
             content = eval(cmd_split[2])
-            print(content)
             if len(path.split(os.path.sep)) == 1:
                 file_name = path
                 path = '.'

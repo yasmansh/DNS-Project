@@ -3,6 +3,7 @@ import sqlite3
 import rsa
 from rsa import PublicKey, PrivateKey
 
+
 def select_from_file_keys(db: sqlite3.Connection, file_id: int):
     query = f"SELECT * FROM file_keys WHERE id={file_id}"
     file_tuple = db.execute(query).fetchone()
