@@ -186,7 +186,6 @@ def delete_files_access(db: sqlite3.Connection, file_id: int, username: str, des
         query = f'DELETE FROM files_access WHERE username!="{username}" and file_id={file_id}'
     else:
         query = f'DELETE FROM files_access WHERE username="{dest_username}" and file_id={file_id}'
-    print(query)
     insert_update_delete_query(db, query)
 
 

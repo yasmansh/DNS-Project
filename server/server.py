@@ -110,7 +110,8 @@ def threaded_client(client: socket.socket, address):  # Authentication
             print('client disconnected.|')
             break
         else:
-            # send message to client
+            message = "M||Not understand"
+            send_message(client, message, user_public_key, private_key)
             print("Not understand|")
     client.close()
 
