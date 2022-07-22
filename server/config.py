@@ -53,9 +53,23 @@ read_token = gen_nonce()
 write_token = gen_nonce()
 ts = get_timestamp()
 query = f"""INSERT INTO folders (id, name, parent_id, timestamp, base)
-VALUES (1, 'Directory', 1, {ts}, false)"""
+VALUES (1, 'Directory', NULL, {ts}, false)"""
 insert_update_delete_query(db, query)
 content = f"""1
 {ts}
 0"""
 write_meta(os.path.join(os.getcwd(), 'Directory'), content, public_key)
+
+
+shared_folder_name = rsa.encrypt('2'.encode(), public_key).hex()
+os.mkdir(os.path.join('Directory', shared_folder_name))
+read_token = gen_nonce()
+write_token = gen_nonce()
+ts = get_timestamp()
+query = f"""INSERT INTO folders (id, name, parent_id, timestamp, base)
+VALUES (2, '~', 1, {ts}, true)"""
+insert_update_delete_query(db, query)
+content = f"""1
+{ts}
+0"""
+write_meta(os.path.join('Directory', shared_folder_name), content, public_key)

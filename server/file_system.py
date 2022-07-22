@@ -63,6 +63,7 @@ def get_encrypted_file_name(absolute_path: str, name: str, private_key: rsa.Priv
 
 def get_encrypted_absolute_path(absolute_folders: list, private_key: rsa.PrivateKey, db: sqlite3.Connection) -> str:
     res = ''
+    print(absolute_folders)
     for folder in absolute_folders[1:]:
         folder_name = folder['name']
         parent_id = folder['parent_id']
@@ -101,6 +102,8 @@ def goto_path(db: sqlite3.Connection, client: socket.socket, path: str, current_
         path_split = path_split[1:]
         user_base_dir = user['base_folder_id']
         current_folder_id = user_base_dir
+    elif path_split[0] == '~':
+        return True, 2
     for new_folder_name in path_split:
         absolute_path_folders = get_absolute_path_folders(db, current_folder_id)
         absolute_path_encrypted = get_encrypted_absolute_path(absolute_path_folders, private_key, db)
@@ -187,6 +190,10 @@ def mkdir(db: sqlite3.Connection, client: socket.socket, user: dict, path: str, 
     if path_split[0] == '':
         current_folder_id = user['base_folder_id']
         path_split = path_split[1:]
+    elif path_split[0] == '~':
+        absolute_path_folders = get_absolute_path_folders(db, current_folder_id)
+        absolute_path_encrypted = get_encrypted_absolute_path(absolute_path_folders, private_key, db)
+        return True, absolute_path_encrypted
     for new_folder_name in path_split:
         folder = get_folder_by_id(db, current_folder_id)
         folder_id = folder['id']
