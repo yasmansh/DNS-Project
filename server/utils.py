@@ -56,7 +56,7 @@ def encrypt_and_sign(message: str, private_key: rsa.PrivateKey, public_key: rsa.
     return cipher
 
 
-def check_sign_and_timestamp(client: socket.socket, cipher: str, private_key: rsa.PrivateKey,
+def check_sign_and_timestamp(client: socket.socket, cipher: bytes, private_key: rsa.PrivateKey,
                              public_key: rsa.PublicKey) -> object:
     plaintext = decrypt_cipher(cipher, private_key)
     plaintext = plaintext.split('||')
@@ -101,6 +101,6 @@ def send_message(client: socket.socket, message: str, user_public_key: rsa.Publi
 
 
 def get_message(client: socket.socket, user_public_key: rsa.PublicKey, private_key: rsa.PrivateKey):
-    cipher = client.recv(2048)
+    cipher = client.recv(20000)
     ok, cmd_split = check_sign_and_timestamp(client, cipher, private_key, user_public_key)
     return ok, cmd_split
